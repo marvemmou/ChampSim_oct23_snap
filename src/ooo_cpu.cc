@@ -108,18 +108,93 @@ void O3_CPU::initialize_instruction()
 {
   auto instrs_to_read_this_cycle = std::min(FETCH_WIDTH, static_cast<long>(IFETCH_BUFFER_SIZE - std::size(IFETCH_BUFFER)));
 
-  while (current_cycle >= fetch_resume_cycle && instrs_to_read_this_cycle > 0 && !std::empty(input_queue)) {
-    instrs_to_read_this_cycle--;
+  // select trace
 
-    auto stop_fetch = do_init_instruction(input_queue.front());
-    if (stop_fetch)
-      instrs_to_read_this_cycle = 0;
+  // if we have enough width to fetch instructions
+  // and we're not stalled on a branch misprediction
+  while (current_cycle >= fetch_resume_cycle && instrs_to_read_this_cycle > 0) {
+    uint64_t start = instrs_to_read_this_cycle;
+    uint32_t minim = UINT32_MAX, min_it = UINT32_MAX;
+    
+    bool stop_fetch; 
+
+    if (warmup) {
+      min_it = next_trace_id;
+      next_trace_id = (next_trace_id+1)%num_traces;
+    }
+    else {
+      switch (switch_policy) {
+        case RR:
+        {
+          min_it = next_trace_id;
+          next_trace_id = (next_trace_id+1)%num_traces;
+        }
+          break;
+        case ICOUNT: 
+        {
+        }
+          break;
+        case ON_DETECT_MISS:
+        {
+          if(!context_switch) {
+            min_it = cur_trace_id;
+          }
+          else {
+            context_switch = 0;
+            min_it = next_trace_id;
+            next_trace_id = (next_trace_id+1)%num_traces;
+          }
+          //cout << "switching threads, currently was fetching from " << cur_trace_id <<  endl;
+        }
+          break;
+        
+        default:
+          break;
+      }
+
+    }
+
+    if(min_it != UINT32_MAX && !std::empty(input_queue[min_it])) {
+
+      instrs_to_read_this_cycle--;
+
+      if (min_it != cur_trace_id) {
+        num_context_switches[cur_trace_id]++;
+        //cout << "switch to fetching from thread " << min_it  << endl;
+      }
+      cur_trace_id = min_it;
+
+      bool from_replay = false;
+      // normal fetch, we're fetching new instructions
+      if(replay[min_it].empty()) {
+        // init_instruction returns whether the instruction was a mispredicted branch or not; true means we need to stop fetching
+        stop_fetch = do_init_instruction(input_queue[min_it].front());
+        
+        // added to simulate perfect branch prediction
+        stop_fetch = false;
+        
+        IFETCH_BUFFER.push_back(input_queue[min_it].front());
+        input_queue[min_it].pop_front();
+      }
+      else {
+        IFETCH_BUFFER.push_back(replay[min_it].back());
+        replay[min_it].pop_back();
+        from_replay = true;
+        stop_fetch = false;
+        //cout << "fetching from replay, ip " << instr.ip << ", remaining " << ooo_cpu[i]->replay[min_it].size() << endl;
+      }
+
+      cur_fetch_id = min_it;
+      
+      if (stop_fetch)
+        instrs_to_read_this_cycle = 0;
 
     // Add to IFETCH_BUFFER
     IFETCH_BUFFER.push_back(input_queue.front());
     input_queue.pop_front();
 
-    IFETCH_BUFFER.back().event_cycle = current_cycle;
+      IFETCH_BUFFER.back().event_cycle = current_cycle;
+    }
   }
 }
 

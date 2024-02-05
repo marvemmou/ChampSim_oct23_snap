@@ -113,6 +113,72 @@ public:
   using stats_type = cpu_stats;
 
   stats_type roi_stats{}, sim_stats{};
+  
+  uint32_t flush_smt;
+  bool flush_allowed = 0;
+  /* per-thread; set to 1 when a switch condition is met, set to 0 when the instigator is retired
+        checked in operate to decide whether to call pipeline_flush*/
+  bool do_pipeline_flush[16] = {};
+  // per-smt-core; set to the rob_it that caused the switch
+  std::deque<ooo_model_instr>> flush_it[16] = {};
+  
+  uint32_t switch_point = 0;
+  uint32_t counter = 0;
+
+  typedef enum{
+  ON_DETECT_MISS = 0,
+  ON_BLOCK_ROB = 1,
+  ON_ISSUE = 2,
+  TRACE_MAX_MLP = 3,
+  TRACE_GREEDY_MLP = 4,
+  ON_FETCH = 5
+  } switch_points;
+
+  uint64_t switch_policy = 0;
+
+  typedef enum{
+    RR = 0,
+    ICOUNT = 1,
+    ON_DETECT_MISS = 2,
+    ON_PREDICT_MISS = 3,
+  } policies;
+
+  uint32_t num_traces;
+  uint64_t retire_bubbles = 0, miss_retire_bubbles = 0;
+  uint64_t rob_all_blocked_on_ld = 0, rob_min_one_blocked_on_llc = 0, rob_all_blocked_on_llc = 0, rob_blocked_on_st = 0;
+  uint64_t rob_blocked_on_other = 0, rob_blocked_on_non_memory = 0, rob_blocked_on_memory = 0, rob_empty = 0, rob_blocked_on_schedule = 0;
+  uint64_t num_context_switches[16] = {}, num_flushes[16] = {};
+  //VectorCounter flushed_instructions, flush_intervals, empty_rob_intervals;
+  uint64_t total_flushed = 0, flushed_on_fetch = 0, flushed_on_decode = 0, flushed_on_dispatch = 0, flushed_on_rob = 0;
+  uint64_t flushed_return_loads = 0;
+  uint64_t flushed_loads_hits[16] = {}, flushed_loads_misses[16] = {};
+
+  uint64_t total_fetched_instrs = 0;
+  uint64_t cycles_no_fetch = 0, cycles_no_retire = 0, cycles_no_fetch_full = 0, cycles_lq_full = 0, cycles_sq_full = 0;
+  uint64_t prev_fetch_cycle = 0;
+
+  uint32_t cur_trace_id = 0, next_trace_id = 0;
+  uint32_t cur_fetch_id = 0;
+
+  std::unordered_map<uint64_t, mlp_instr> timestamp_map;
+
+  std::deque<ooo_model_instr> replay[16], trace_replay[16];
+  bool context_switch = 0;
+  uint64_t flush_fetch_resume = 0;
+  // per-trace; set to 1 when a switch condition is met (eg llc miss), set to 0 when the instigator is retired
+  bool switch_condition_met[16] = {};
+  bool switch_condition_done[16] = {};
+  bool flush_completed[16] = {};
+  uint64_t last_flush_cycle = 0, last_retire_cycle = 0;
+
+  uint8_t is_cgmt = 0;
+
+  std::ofstream outfile[16];
+  std::ofstream timestamp_file;
+
+  mlp_instr instigator;
+  uint64_t issue_mlp = 0;
+
 
   // instruction buffer
   struct dib_shift {
