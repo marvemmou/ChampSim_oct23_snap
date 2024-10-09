@@ -23,6 +23,7 @@
 #include <numeric>
 #include <fmt/core.h>
 #include <fmt/ranges.h>
+#include <iostream>
 
 #include "champsim.h"
 #include "champsim_constants.h"
@@ -34,13 +35,13 @@
 
 CACHE::tag_lookup_type::tag_lookup_type(request_type req, bool local_pref, bool skip)
     : address(req.address), v_address(req.v_address), data(req.data), ip(req.ip), instr_id(req.instr_id), pf_metadata(req.pf_metadata), cpu(req.cpu),
-      type(req.type), prefetch_from_this(local_pref), skip_fill(skip), is_translated(req.is_translated), instr_depend_on_me(req.instr_depend_on_me)
+      type(req.type), prefetch_from_this(local_pref), skip_fill(skip), is_translated(req.is_translated), trace_id(req.trace_id), rob_it(req.rob_it) , instr_depend_on_me(req.instr_depend_on_me)
 {
 }
 
 CACHE::mshr_type::mshr_type(tag_lookup_type req, uint64_t cycle)
     : address(req.address), v_address(req.v_address), data(req.data), ip(req.ip), instr_id(req.instr_id), pf_metadata(req.pf_metadata), cpu(req.cpu),
-      type(req.type), prefetch_from_this(req.prefetch_from_this), cycle_enqueued(cycle), instr_depend_on_me(req.instr_depend_on_me), to_return(req.to_return)
+      type(req.type), prefetch_from_this(req.prefetch_from_this), cycle_enqueued(cycle), trace_id(req.trace_id), rob_it(req.rob_it) , instr_depend_on_me(req.instr_depend_on_me), to_return(req.to_return)
 {
 }
 
@@ -116,6 +117,8 @@ bool CACHE::handle_fill(const mshr_type& fill_mshr)
       writeback_packet.pf_metadata = way->pf_metadata;
       writeback_packet.response_requested = false;
 
+      writeback_packet.trace_id = fill_mshr.trace_id;
+
       if constexpr (champsim::debug_print) {
         fmt::print("[{}] {} evict address: {:#x} v_address: {:#x} prefetch_metadata: {}\n", NAME,
             __func__, writeback_packet.address, writeback_packet.v_address, fill_mshr.pf_metadata);
@@ -156,7 +159,7 @@ bool CACHE::handle_fill(const mshr_type& fill_mshr)
     // COLLECT STATS
     sim_stats.total_miss_latency += current_cycle - (fill_mshr.cycle_enqueued + 1);
 
-    response_type response{fill_mshr.address, fill_mshr.v_address, fill_mshr.data, metadata_thru, fill_mshr.instr_depend_on_me};
+    response_type response{fill_mshr.address, fill_mshr.v_address, fill_mshr.data, metadata_thru, fill_mshr.instr_id, fill_mshr.trace_id, fill_mshr.instr_depend_on_me};
     for (auto ret : fill_mshr.to_return)
       ret->push_back(response);
   }
@@ -196,7 +199,7 @@ bool CACHE::try_hit(const tag_lookup_type& handle_pkt)
     impl_update_replacement_state(handle_pkt.cpu, get_set_index(handle_pkt.address), way_idx, way->address, handle_pkt.ip, 0,
                                   champsim::to_underlying(handle_pkt.type), true);
 
-    response_type response{handle_pkt.address, handle_pkt.v_address, way->data, metadata_thru, handle_pkt.instr_depend_on_me};
+    response_type response{handle_pkt.address, handle_pkt.v_address, way->data, metadata_thru, handle_pkt.instr_id, handle_pkt.trace_id, handle_pkt.instr_depend_on_me};
     for (auto ret : handle_pkt.to_return)
       ret->push_back(response);
 
@@ -248,6 +251,12 @@ bool CACHE::handle_miss(const tag_lookup_type& handle_pkt)
       return false;  // TODO should we allow prefetches anyway if they will not be filled to this level?
     }
 
+
+    if (this->NAME == "LLC" && handle_pkt.rob_it != NULL && handle_pkt.instr_id == handle_pkt.rob_it->instr_id && !handle_pkt.rob_it->cant_trigger_switch) {
+      assert(handle_pkt.instr_id == handle_pkt.rob_it->instr_id);
+      handle_pkt.rob_it->went_offchip = true;
+    }
+
     request_type fwd_pkt;
 
     fwd_pkt.asid[0] = handle_pkt.asid[0];
@@ -261,6 +270,9 @@ bool CACHE::handle_miss(const tag_lookup_type& handle_pkt)
     fwd_pkt.data = handle_pkt.data;
     fwd_pkt.instr_id = handle_pkt.instr_id;
     fwd_pkt.ip = handle_pkt.ip;
+
+    fwd_pkt.trace_id = handle_pkt.trace_id;
+    fwd_pkt.rob_it = handle_pkt.rob_it;
 
     fwd_pkt.instr_depend_on_me = handle_pkt.instr_depend_on_me;
     fwd_pkt.response_requested = (!handle_pkt.prefetch_from_this || !handle_pkt.skip_fill);
@@ -566,6 +578,8 @@ void CACHE::issue_translation()
       fwd_pkt.data = q_entry.data;
       fwd_pkt.instr_id = q_entry.instr_id;
       fwd_pkt.ip = q_entry.ip;
+
+      fwd_pkt.trace_id = q_entry.trace_id;
 
       fwd_pkt.instr_depend_on_me = q_entry.instr_depend_on_me;
       fwd_pkt.is_translated = true;

@@ -20,6 +20,7 @@
 #include <chrono>
 #include <numeric>
 #include <vector>
+#include <iostream>
 
 #include "environment.h"
 #include "ooo_cpu.h"
@@ -56,7 +57,7 @@ phase_stats do_phase(phase_info phase, environment& env, std::vector<tracereader
 
     // Operate
     long progress{0};
-    for (champsim::operable& op : operables) {
+    for (champsim::operable& op : operables) {    
       progress += op._operate();
     }
 
@@ -98,6 +99,7 @@ phase_stats do_phase(phase_info phase, environment& env, std::vector<tracereader
           if (trace.eof())
             std::fill(std::begin(next_phase_complete), std::end(next_phase_complete), true);
       }
+    }
 
     // Check for phase finish
     for (O3_CPU& cpu : env.cpu_view()) {

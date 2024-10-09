@@ -73,6 +73,9 @@ class CACHE : public champsim::operable
     uint32_t pf_metadata;
     uint32_t cpu;
 
+    uint64_t trace_id;
+    ooo_model_instr* rob_it = NULL;
+
     access_type type;
     bool prefetch_from_this;
     bool skip_fill;
@@ -99,6 +102,10 @@ class CACHE : public champsim::operable
 
     uint32_t pf_metadata;
     uint32_t cpu;
+
+    uint64_t trace_id;
+    ooo_model_instr* rob_it = NULL;
+
 
     access_type type;
     bool prefetch_from_this;

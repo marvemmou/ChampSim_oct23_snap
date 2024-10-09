@@ -19,6 +19,7 @@
 #include <numeric>
 #include <string>
 #include <vector>
+#include <iostream>
 
 #include "champsim.h"
 #include "champsim_constants.h"
@@ -65,16 +66,19 @@ int main(int argc, char** argv)
   auto json_option =
       app.add_option("--json", json_file_name, "The name of the file to receive JSON output. If no name is specified, stdout will be used")->expected(0, 1);
 
-  app.add_option("traces", trace_names, "The paths to the traces")->required()->check(CLI::ExistingFile);
+  app.add_option("--traces", trace_names, "The paths to the traces")->required()->check(CLI::ExistingFile);
 
-  uint8_t f_allowed = 0;
+  bool f_allowed = 0;
   uint32_t switch_point = 0, switch_policy = 0;
-  uint8_t is_cgmt = 0;
+  bool is_cgmt = 0;
 
   auto switch_policy_option = app.add_option("-p", switch_policy, "Context switch policy");
+  
   app.add_flag("-f", f_allowed, "Flush allowed");
+  
   auto switch_point_option = app.add_option("-s", switch_point, "Context switch point");
-  app.add_flag("-c", is_cgmt, "Coarse-grain MT");
+  
+  app.add_flag("-m", is_cgmt, "Coarse-grain MT");
 
 
   CLI11_PARSE(app, argc, argv);
@@ -96,9 +100,13 @@ int main(int argc, char** argv)
       std::begin(trace_names), std::end(trace_names), std::back_inserter(traces),
       [knob_cloudsuite, repeat = simulation_given, i = uint8_t(0)](auto name) mutable { return get_tracereader(name, i++, knob_cloudsuite, repeat); });
 
+  for (int i=0; i<traces.size(); i++) {
+    traces[i].trace_id = i;
+  }
+
   std::vector<champsim::phase_info> phases{
-      {champsim::phase_info{"Warmup", true, warmup_instructions, std::vector<std::size_t>(std::size(trace_names), 0), trace_names},
-       champsim::phase_info{"Simulation", false, simulation_instructions, std::vector<std::size_t>(std::size(trace_names), 0), trace_names}}};
+      {champsim::phase_info{"Warmup", true, warmup_instructions * traces.size(), std::vector<std::size_t>(std::size(trace_names), 0), trace_names},
+       champsim::phase_info{"Simulation", false, simulation_instructions * traces.size(), std::vector<std::size_t>(std::size(trace_names), 0), trace_names}}};
 
   for (auto& p : phases)
     std::iota(std::begin(p.trace_index), std::end(p.trace_index), 0);
@@ -114,7 +122,7 @@ int main(int argc, char** argv)
   fmt::print("\n*** ChampSim Multicore Out-of-Order Simulator ***\nWarmup Instructions: {}\nSimulation Instructions: {}\nNumber of CPUs: {}\nPage size: {}\n\n",
              phases.at(0).length, phases.at(1).length, std::size(gen_environment.cpu_view()), PAGE_SIZE);
 
-  fmt::print("\n Switch policy: {}\nSwitch point: {}\n\n",switch_policy,switch_point);
+  fmt::print("\nSwitch policy: {}\nSwitch point: {}\n\n",switch_policy,switch_point);
 
   auto phase_stats = champsim::main(gen_environment, phases, traces);
 

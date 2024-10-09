@@ -48,6 +48,8 @@ class PageTableWalker : public champsim::operable
     uint64_t address = 0;
     uint64_t v_address = 0;
     uint64_t data = 0;
+    uint64_t instr_id = 0;
+    uint64_t trace_id = 0;
 
     std::vector<std::reference_wrapper<ooo_model_instr>> instr_depend_on_me{};
     std::vector<std::deque<response_type>*> to_return{};

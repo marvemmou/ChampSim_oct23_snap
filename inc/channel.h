@@ -79,6 +79,9 @@ class channel
     uint64_t instr_id = 0;
     uint64_t ip = 0;
 
+    uint64_t trace_id = 0;
+    ooo_model_instr* rob_it = NULL;
+
     std::vector<std::reference_wrapper<ooo_model_instr>> instr_depend_on_me{};
   };
 
@@ -87,13 +90,18 @@ class channel
     uint64_t v_address;
     uint64_t data;
     uint32_t pf_metadata = 0;
+    uint64_t instr_id;
+    uint64_t trace_id;
     std::vector<std::reference_wrapper<ooo_model_instr>> instr_depend_on_me{};
 
-    response(uint64_t addr, uint64_t v_addr, uint64_t data_, uint32_t pf_meta, std::vector<std::reference_wrapper<ooo_model_instr>> deps)
-        : address(addr), v_address(v_addr), data(data_), pf_metadata(pf_meta), instr_depend_on_me(deps)
+    uint64_t ip;
+
+
+    response(uint64_t addr, uint64_t v_addr, uint64_t data_, uint32_t pf_meta, uint64_t inid, uint64_t tid, std::vector<std::reference_wrapper<ooo_model_instr>> deps)
+        : address(addr), v_address(v_addr), data(data_), pf_metadata(pf_meta), instr_id(inid), trace_id(tid), instr_depend_on_me(deps)
     {
     }
-    explicit response(request req) : response(req.address, req.v_address, req.data, req.pf_metadata, req.instr_depend_on_me) {}
+    explicit response(request req) : response(req.address, req.v_address, req.data, req.pf_metadata, req.instr_id, req.trace_id, req.instr_depend_on_me) {}
   };
 
   template <typename R>

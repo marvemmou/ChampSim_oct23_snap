@@ -41,6 +41,8 @@
 #include "util/lru_table.h"
 #include <type_traits>
 
+#include <fstream>
+
 enum STATUS { INFLIGHT = 1, COMPLETED = 2 };
 
 class CACHE;
@@ -88,6 +90,15 @@ struct LSQ_ENTRY {
 
   LSQ_ENTRY(uint64_t id, uint64_t addr, uint64_t ip, std::array<uint8_t, 2> asid);
   void finish(std::deque<ooo_model_instr>::iterator begin, std::deque<ooo_model_instr>::iterator end) const;
+
+  uint8_t merged = 0;
+  uint8_t data_index = 0;
+  uint32_t trace_id = 0;
+  bool is_prefetch = 0, has_lq_entry = 0;
+  bool is_cxl = 0;
+
+  ooo_model_instr* my_rob_it = NULL;
+
 };
 
 // cpu
@@ -120,15 +131,15 @@ public:
         checked in operate to decide whether to call pipeline_flush*/
   bool do_pipeline_flush[16] = {};
   // per-smt-core; set to the rob_it that caused the switch
-  std::deque<ooo_model_instr>> flush_it[16] = {};
-  
+  std::deque<ooo_model_instr>::iterator flush_it;
+
   uint32_t switch_point = 0;
   uint32_t counter = 0;
 
   typedef enum{
   ON_DETECT_MISS = 0,
   ON_BLOCK_ROB = 1,
-  ON_ISSUE = 2,
+  ON_DISPATCH = 2,
   TRACE_MAX_MLP = 3,
   TRACE_GREEDY_MLP = 4,
   ON_FETCH = 5
@@ -139,7 +150,7 @@ public:
   typedef enum{
     RR = 0,
     ICOUNT = 1,
-    ON_DETECT_MISS = 2,
+    ON_FOUND_MISS = 2,
     ON_PREDICT_MISS = 3,
   } policies;
 
@@ -162,7 +173,7 @@ public:
 
   std::unordered_map<uint64_t, mlp_instr> timestamp_map;
 
-  std::deque<ooo_model_instr> replay[16], trace_replay[16];
+  std::deque<ooo_model_instr> instr_to_file_pos, replay[16], trace_replay[16];
   bool context_switch = 0;
   uint64_t flush_fetch_resume = 0;
   // per-trace; set to 1 when a switch condition is met (eg llc miss), set to 0 when the instigator is retired
@@ -171,7 +182,7 @@ public:
   bool flush_completed[16] = {};
   uint64_t last_flush_cycle = 0, last_retire_cycle = 0;
 
-  uint8_t is_cgmt = 0;
+  bool is_cgmt = 0;
 
   std::ofstream outfile[16];
   std::ofstream timestamp_file;
@@ -197,7 +208,7 @@ public:
   std::vector<std::optional<LSQ_ENTRY>> LQ;
   std::deque<LSQ_ENTRY> SQ;
 
-  std::array<std::vector<std::reference_wrapper<ooo_model_instr>>, std::numeric_limits<uint8_t>::max() + 1> reg_producers;
+  std::array<std::vector<std::reference_wrapper<ooo_model_instr>>, std::numeric_limits<uint8_t>::max() + 1> reg_producers[16];
 
   // Constants
   const std::size_t IFETCH_BUFFER_SIZE, DISPATCH_BUFFER_SIZE, DECODE_BUFFER_SIZE, ROB_SIZE, SQ_SIZE;
@@ -206,12 +217,15 @@ public:
   const long int RETIRE_WIDTH;
   const unsigned BRANCH_MISPREDICT_PENALTY, DISPATCH_LATENCY, DECODE_LATENCY, SCHEDULING_LATENCY, EXEC_LATENCY;
   const long int L1I_BANDWIDTH, L1D_BANDWIDTH;
+  const unsigned FLUSH_PENALTY;
 
   // branch
   uint64_t fetch_resume_cycle = 0;
 
   const long IN_QUEUE_SIZE = 2 * FETCH_WIDTH;
-  std::deque<ooo_model_instr> input_queue;
+
+  // 1 input queue per thread on a core
+  std::deque<ooo_model_instr> input_queue[16];
 
   CacheBus L1I_bus, L1D_bus;
   CACHE* l1i;
@@ -248,6 +262,8 @@ public:
   void do_finish_store(const LSQ_ENTRY& sq_entry);
   bool do_complete_store(const LSQ_ENTRY& sq_entry);
   bool execute_load(const LSQ_ENTRY& lq_entry);
+
+  void pipeline_flush();
 
   uint64_t roi_instr() const { return roi_stats.instrs(); }
   uint64_t roi_cycle() const { return roi_stats.cycles(); }
@@ -328,6 +344,7 @@ public:
     unsigned m_sq_width{};
     unsigned m_retire_width{};
     unsigned m_mispredict_penalty{};
+    unsigned m_flush_penalty{};
     unsigned m_decode_latency{};
     unsigned m_dispatch_latency{};
     unsigned m_schedule_latency{};
@@ -348,7 +365,7 @@ public:
           m_dispatch_buffer_size(other.m_dispatch_buffer_size), m_rob_size(other.m_rob_size), m_lq_size(other.m_lq_size), m_sq_size(other.m_sq_size),
           m_fetch_width(other.m_fetch_width), m_decode_width(other.m_decode_width), m_dispatch_width(other.m_dispatch_width),
           m_schedule_width(other.m_schedule_width), m_execute_width(other.m_execute_width), m_lq_width(other.m_lq_width), m_sq_width(other.m_sq_width),
-          m_retire_width(other.m_retire_width), m_mispredict_penalty(other.m_mispredict_penalty), m_decode_latency(other.m_decode_latency),
+          m_retire_width(other.m_retire_width), m_mispredict_penalty(other.m_mispredict_penalty), m_flush_penalty(other.m_flush_penalty), m_decode_latency(other.m_decode_latency),
           m_dispatch_latency(other.m_dispatch_latency), m_schedule_latency(other.m_schedule_latency), m_execute_latency(other.m_execute_latency),
           m_l1i(other.m_l1i), m_l1i_bw(other.m_l1i_bw), m_l1d_bw(other.m_l1d_bw), m_fetch_queues(other.m_fetch_queues), m_data_queues(other.m_data_queues)
     {
@@ -457,6 +474,11 @@ public:
       m_mispredict_penalty = mispredict_penalty_;
       return *this;
     }
+    self_type& flush_penalty(unsigned flush_penalty_)
+    {
+      m_flush_penalty = flush_penalty_;
+      return *this;
+    }
     self_type& decode_latency(unsigned decode_latency_)
     {
       m_decode_latency = decode_latency_;
@@ -521,7 +543,7 @@ public:
         LQ(b.m_lq_size), IFETCH_BUFFER_SIZE(b.m_ifetch_buffer_size), DISPATCH_BUFFER_SIZE(b.m_dispatch_buffer_size), DECODE_BUFFER_SIZE(b.m_decode_buffer_size),
         ROB_SIZE(b.m_rob_size), SQ_SIZE(b.m_sq_size), FETCH_WIDTH(b.m_fetch_width), DECODE_WIDTH(b.m_decode_width), DISPATCH_WIDTH(b.m_dispatch_width),
         SCHEDULER_SIZE(b.m_schedule_width), EXEC_WIDTH(b.m_execute_width), LQ_WIDTH(b.m_lq_width), SQ_WIDTH(b.m_sq_width), RETIRE_WIDTH(b.m_retire_width),
-        BRANCH_MISPREDICT_PENALTY(b.m_mispredict_penalty), DISPATCH_LATENCY(b.m_dispatch_latency), DECODE_LATENCY(b.m_decode_latency),
+        BRANCH_MISPREDICT_PENALTY(b.m_mispredict_penalty), FLUSH_PENALTY(b.m_flush_penalty), DISPATCH_LATENCY(b.m_dispatch_latency), DECODE_LATENCY(b.m_decode_latency),
         SCHEDULING_LATENCY(b.m_schedule_latency), EXEC_LATENCY(b.m_execute_latency), L1I_BANDWIDTH(b.m_l1i_bw), L1D_BANDWIDTH(b.m_l1d_bw),
         L1I_bus(b.m_cpu, b.m_fetch_queues), L1D_bus(b.m_cpu, b.m_data_queues), l1i(b.m_l1i), module_pimpl(std::make_unique<module_model<B_FLAG, T_FLAG>>(this))
   {

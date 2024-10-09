@@ -49,6 +49,9 @@ struct DRAM_CHANNEL {
     uint64_t data = 0;
     uint64_t event_cycle = std::numeric_limits<uint64_t>::max();
 
+    uint64_t instr_id = 0;
+    uint64_t trace_id = 0;
+
     std::vector<std::reference_wrapper<ooo_model_instr>> instr_depend_on_me{};
     std::vector<std::deque<response_type>*> to_return{};
 
@@ -117,7 +120,7 @@ public:
   uint32_t dram_get_channel(uint64_t address);
   uint32_t dram_get_rank(uint64_t address);
   uint32_t dram_get_bank(uint64_t address);
-  uint32_t dram_get_row(uint64_t address);
+  uint32_t dram_get_row(uint64_t address, uint64_t trace_id);
   uint32_t dram_get_column(uint64_t address);
 };
 

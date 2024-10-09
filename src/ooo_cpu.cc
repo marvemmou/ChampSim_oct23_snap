@@ -20,6 +20,7 @@
 #include <chrono>
 #include <cmath>
 #include <numeric>
+#include <iostream>
 
 #include "cache.h"
 #include "champsim.h"
@@ -50,6 +51,30 @@ long O3_CPU::operate()
   progress += fetch_instruction(); // fetch
   progress += check_dib();
   initialize_instruction();
+
+  if(flush_allowed && do_pipeline_flush[cur_fetch_id]) {  
+  
+    if (switch_point != ON_FETCH) {
+      pipeline_flush();
+    }
+
+    switch_condition_met[cur_fetch_id] = false;
+    do_pipeline_flush[cur_fetch_id] = false;
+    context_switch = 1;
+    flush_fetch_resume = current_cycle + FLUSH_PENALTY;
+
+    //greedy_start = false;
+    issue_mlp = 0;
+    
+    num_flushes[cur_fetch_id]++;
+
+    last_flush_cycle = current_cycle;
+  }
+
+
+  if(flush_fetch_resume > 0 && current_cycle >= flush_fetch_resume) {
+    flush_fetch_resume = 0;
+  }
 
   // heartbeat
   if (show_heartbeat && (num_retired >= next_print_instruction)) {
@@ -112,7 +137,11 @@ void O3_CPU::initialize_instruction()
 
   // if we have enough width to fetch instructions
   // and we're not stalled on a branch misprediction
-  while (current_cycle >= fetch_resume_cycle && instrs_to_read_this_cycle > 0) {
+  uint64_t iters = instrs_to_read_this_cycle * num_traces;
+
+  while (current_cycle >= fetch_resume_cycle && current_cycle >= flush_fetch_resume && instrs_to_read_this_cycle > 0 && iters > 0) {
+
+    iters--;
     uint64_t start = instrs_to_read_this_cycle;
     uint32_t minim = UINT32_MAX, min_it = UINT32_MAX;
     
@@ -134,7 +163,7 @@ void O3_CPU::initialize_instruction()
         {
         }
           break;
-        case ON_DETECT_MISS:
+        case ON_FOUND_MISS:
         {
           if(!context_switch) {
             min_it = cur_trace_id;
@@ -154,47 +183,67 @@ void O3_CPU::initialize_instruction()
 
     }
 
-    if(min_it != UINT32_MAX && !std::empty(input_queue[min_it])) {
-
-      instrs_to_read_this_cycle--;
-
-      if (min_it != cur_trace_id) {
-        num_context_switches[cur_trace_id]++;
-        //cout << "switch to fetching from thread " << min_it  << endl;
-      }
-      cur_trace_id = min_it;
-
-      bool from_replay = false;
-      // normal fetch, we're fetching new instructions
-      if(replay[min_it].empty()) {
-        // init_instruction returns whether the instruction was a mispredicted branch or not; true means we need to stop fetching
-        stop_fetch = do_init_instruction(input_queue[min_it].front());
+    if(min_it != UINT32_MAX ) {
+      
+      if (!replay[min_it].empty()) {
+        assert(!warmup);
+        instrs_to_read_this_cycle--;
+        if (min_it != cur_trace_id) {
+          num_context_switches[cur_trace_id]++;
+          cur_trace_id = min_it;
+        }
         
+        auto temp = replay[min_it].back();
+        instr_to_file_pos.push_back(temp);
+
+        stop_fetch = do_init_instruction(replay[min_it].back());
+
+        IFETCH_BUFFER.push_back(replay[min_it].back());
+        replay[min_it].pop_back();
+        //from_replay = true;
+        
+        // added to simulate perfect branch prediction
+        stop_fetch = false;
+
+        cur_fetch_id = min_it;
+      
+        if (stop_fetch)
+          instrs_to_read_this_cycle = 0;
+
+        IFETCH_BUFFER.back().event_cycle = current_cycle;
+      }
+      else if (!std::empty(input_queue[min_it])){
+        instrs_to_read_this_cycle--;
+        
+        if (min_it != cur_trace_id) {
+          num_context_switches[cur_trace_id]++;
+          cur_trace_id = min_it;
+        }
+        auto temp = input_queue[min_it].front();
+        instr_to_file_pos.push_back(temp);
+
+        stop_fetch = do_init_instruction(input_queue[min_it].front());
+
+        input_queue[min_it].front().trace_id = min_it;
         // added to simulate perfect branch prediction
         stop_fetch = false;
         
         IFETCH_BUFFER.push_back(input_queue[min_it].front());
+        if(warmup) {
+          IFETCH_BUFFER.back().is_warmup = true;
+        }
+
         input_queue[min_it].pop_front();
-      }
-      else {
-        IFETCH_BUFFER.push_back(replay[min_it].back());
-        replay[min_it].pop_back();
-        from_replay = true;
-        stop_fetch = false;
-        //cout << "fetching from replay, ip " << instr.ip << ", remaining " << ooo_cpu[i]->replay[min_it].size() << endl;
-      }
-
-      cur_fetch_id = min_it;
+              
+        cur_fetch_id = min_it;
       
-      if (stop_fetch)
-        instrs_to_read_this_cycle = 0;
+        if (stop_fetch)
+          instrs_to_read_this_cycle = 0;
 
-    // Add to IFETCH_BUFFER
-    IFETCH_BUFFER.push_back(input_queue.front());
-    input_queue.pop_front();
+        IFETCH_BUFFER.back().event_cycle = current_cycle;
 
-      IFETCH_BUFFER.back().event_cycle = current_cycle;
-    }
+      }
+    } 
   }
 }
 
@@ -269,7 +318,123 @@ bool O3_CPU::do_init_instruction(ooo_model_instr& arch_instr)
   }
 
   ::do_stack_pointer_folding(arch_instr);
-  return do_predict_branch(arch_instr);
+  return false; //perfect prediction do_predict_branch(arch_instr);
+}
+
+void O3_CPU::pipeline_flush() {
+
+  uint32_t trace_id = cur_fetch_id;  
+
+  uint32_t flushed_instrs = 0;
+  uint64_t flush_id = flush_it->instr_id;
+  //auto trigger_lq_entry = flush_lq;
+  assert(!ROB.empty());
+  // std::end points to the next free rob entry where we can issue instructions
+  // when the flush_it points to the same entry as end, it means that the next issued instr will overwrite the flush trigger instr
+  // so we iterate the rob until end points right after flush_it when we want to keep the instigator in the pipeline
+  
+  std::queue<uint64_t> scheduled_lds;
+  bool turn_to_prefetch = false;
+  
+  while (flush_it != ROB.end()) {  
+    auto it = ROB.back();
+    flushed_instrs++;
+    assert(it.trace_id == flush_it->trace_id);
+    turn_to_prefetch = false;
+    
+    bool found = false;
+    for (uint32_t i = 0; i < LQ.size(); i++) {
+      if (it.instr_id == LQ[i]->instr_id) {
+        if (LQ[i]->fetch_issued)
+          found = true;
+        LQ[i].reset();
+      }
+    }
+    if (found) {
+      scheduled_lds.push(it.instr_id);
+    }
+    for (uint32_t i = 0; i < SQ.size(); i++) {
+      if (it.instr_id == SQ[i].instr_id) {
+        SQ.erase(SQ.begin() + i);
+      }
+    }
+
+    for (auto dreg : it.destination_registers) {
+      auto begin = std::begin(reg_producers[it.trace_id][dreg]);
+      auto end = std::end(reg_producers[it.trace_id][dreg]);
+      auto elem = std::find_if(begin, end, [id = it.instr_id, tid = it.trace_id](ooo_model_instr& x) { return x.instr_id == id; });
+      if (elem == end) {        
+        assert(it.executed == COMPLETED || it.scheduled != COMPLETED);
+      }
+      else
+        reg_producers[it.trace_id][dreg].erase(elem);
+    }
+
+    ROB.pop_back();
+  }
+
+  // things issued before the instigator shouldn't be able to trigger a flush
+  for (auto it = ROB.begin(); it != ROB.end(); it++) {
+    it->cant_trigger_switch = 1;
+  }
+
+  flushed_on_rob += flushed_instrs;
+  
+  //std::cout << "flushed instructions from rob = " << flushed_instrs << ", current rob occupancy " << ROB[smt_id].occupancy() <<  endl;
+  
+  // marina: should there be special care for flushed mispredicted branches in terms of removed stall cycles?
+
+  flushed_instrs += IFETCH_BUFFER.size();
+  flushed_on_fetch += IFETCH_BUFFER.size();
+  IFETCH_BUFFER.clear();
+
+  flushed_instrs += DECODE_BUFFER.size();
+  flushed_on_decode += DECODE_BUFFER.size();
+  DECODE_BUFFER.clear();
+
+  flushed_instrs += DISPATCH_BUFFER.size();
+  flushed_on_dispatch += DISPATCH_BUFFER.size();
+  DISPATCH_BUFFER.clear();
+
+  total_flushed += flushed_instrs;
+
+  if (flushed_instrs > 511)
+    flushed_instrs = 511;
+  //flushed_instructions.inc(flushed_instrs);
+
+  //monitor_flushes(trigger_lq_entry,flushed_instrs);
+
+
+  //std::cout << "back " << instr_to_file_pos.back().instr_id << ", front " << instr_to_file_pos.front().instr_id << " flush id " << flush_id << std::endl;
+
+  auto it = instr_to_file_pos.back();
+
+  replay[trace_id].clear();
+
+  while(it.instr_id != flush_id) {
+    if (it.instr_id == scheduled_lds.front()) {
+      it.cant_trigger_switch = 1;
+      scheduled_lds.pop();
+    }
+    replay[it.trace_id].push_back(it);
+
+    instr_to_file_pos.pop_back();
+    it = instr_to_file_pos.back();
+  }
+
+  //std::cout << "back " << instr_to_file_pos.back().instr_id << ", front " << instr_to_file_pos.front().instr_id << " flush id " << it.instr_id << ", lds front " << scheduled_lds.front() << std::endl;
+
+  // instigator
+  if (it.instr_id == scheduled_lds.front()) {
+    it.cant_trigger_switch = 1;
+    it.did_trigger_switch = 1;
+    scheduled_lds.pop();
+  }
+
+  assert(scheduled_lds.empty());
+  replay[it.trace_id].push_back(it);
+
+  instr_to_file_pos.pop_back();
 }
 
 long O3_CPU::check_dib()
@@ -410,6 +575,21 @@ long O3_CPU::dispatch_instruction()
     DISPATCH_BUFFER.pop_front();
     do_memory_scheduling(ROB.back());
 
+    bool prediction = false;
+    auto trace_id = ROB.back().trace_id;
+
+    if (prediction && flush_allowed && switch_point == ON_DISPATCH 
+      && cur_fetch_id == trace_id 
+      && !ROB.back().cant_trigger_switch 
+      && !context_switch
+      && !switch_condition_met[trace_id] && !warmup && !ROB.back().is_warmup) {
+    
+      flush_it = ROB.end() - 1;
+      switch_condition_met[trace_id] = true;
+      flush_it->did_trigger_switch = 1;
+      
+    }
+
     available_dispatch_bandwidth--;
   }
 
@@ -437,8 +617,9 @@ void O3_CPU::do_scheduling(ooo_model_instr& instr)
 {
   // Mark register dependencies
   for (auto src_reg : instr.source_registers) {
-    if (!std::empty(reg_producers[src_reg])) {
-      ooo_model_instr& prior = reg_producers[src_reg].back();
+    if (!std::empty(reg_producers[instr.trace_id][src_reg])) {
+      // get the last of reg producers with the same trace id as me
+      ooo_model_instr& prior = reg_producers[instr.trace_id][src_reg].back();
       if (prior.registers_instrs_depend_on_me.empty() || prior.registers_instrs_depend_on_me.back().get().instr_id != instr.instr_id) {
         prior.registers_instrs_depend_on_me.push_back(instr);
         instr.num_reg_dependent++;
@@ -447,10 +628,10 @@ void O3_CPU::do_scheduling(ooo_model_instr& instr)
   }
 
   for (auto dreg : instr.destination_registers) {
-    auto begin = std::begin(reg_producers[dreg]);
-    auto end = std::end(reg_producers[dreg]);
-    auto ins = std::lower_bound(begin, end, instr, [](const ooo_model_instr& lhs, const ooo_model_instr& rhs) { return lhs.instr_id < rhs.instr_id; });
-    reg_producers[dreg].insert(ins, std::ref(instr));
+    auto begin = std::begin(reg_producers[instr.trace_id][dreg]);
+    auto end = std::end(reg_producers[instr.trace_id][dreg]);
+    auto ins = std::lower_bound(begin, end, instr, [](const ooo_model_instr& lhs, const ooo_model_instr& rhs) { return (lhs.instr_id < rhs.instr_id); });
+    reg_producers[instr.trace_id][dreg].insert(ins, std::ref(instr));
   }
 
   instr.scheduled = COMPLETED;
@@ -498,6 +679,11 @@ void O3_CPU::do_memory_scheduling(ooo_model_instr& instr)
     assert(q_entry != std::end(LQ));
     q_entry->emplace(instr.instr_id, smem, instr.ip, instr.asid); // add it to the load queue
 
+    (*q_entry)->trace_id = instr.trace_id;
+    (*q_entry)->my_rob_it = &instr;
+
+    //lq_it->is_cxl = rob_it->is_cxl;
+
     // Check for forwarding
     auto sq_it = std::max_element(std::begin(SQ), std::end(SQ), [smem](const auto& lhs, const auto& rhs) {
       return lhs.virtual_address != smem || (rhs.virtual_address == smem && lhs.instr_id < rhs.instr_id);
@@ -521,9 +707,11 @@ void O3_CPU::do_memory_scheduling(ooo_model_instr& instr)
   }
 
   // store
-  for (auto& dmem : instr.destination_memory)
+  for (auto& dmem : instr.destination_memory) {
     SQ.emplace_back(instr.instr_id, dmem, instr.ip, instr.asid); // add it to the store queue
-
+    
+    SQ.back().trace_id = instr.trace_id;
+  }
   if constexpr (champsim::debug_print) {
     fmt::print("[DISPATCH] {} instr_id: {} loads: {} stores: {}\n", __func__, instr.instr_id, std::size(instr.source_memory),
                std::size(instr.destination_memory));
@@ -576,10 +764,10 @@ void O3_CPU::do_finish_store(const LSQ_ENTRY& sq_entry)
   // Release dependent loads
   for (std::optional<LSQ_ENTRY>& dependent : sq_entry.lq_depend_on_me) {
     assert(dependent.has_value()); // LQ entry is still allocated
-    assert(dependent->producer_id == sq_entry.instr_id);
-
-    dependent->finish(std::begin(ROB), std::end(ROB));
-    dependent.reset();
+    if (dependent->producer_id == sq_entry.instr_id) {
+      dependent->finish(std::begin(ROB), std::end(ROB));
+      dependent.reset();
+    }
   }
 }
 
@@ -589,6 +777,8 @@ bool O3_CPU::do_complete_store(const LSQ_ENTRY& sq_entry)
   data_packet.v_address = sq_entry.virtual_address;
   data_packet.instr_id = sq_entry.instr_id;
   data_packet.ip = sq_entry.ip;
+
+  data_packet.trace_id = sq_entry.trace_id;
 
   if constexpr (champsim::debug_print) {
     fmt::print("[SQ] {} instr_id: {} vaddr: {:x}\n", __func__, data_packet.instr_id, data_packet.v_address);
@@ -604,6 +794,9 @@ bool O3_CPU::execute_load(const LSQ_ENTRY& lq_entry)
   data_packet.instr_id = lq_entry.instr_id;
   data_packet.ip = lq_entry.ip;
 
+  data_packet.trace_id = lq_entry.trace_id;
+  data_packet.rob_it = lq_entry.my_rob_it;
+
   if constexpr (champsim::debug_print) {
     fmt::print("[LQ] {} instr_id: {} vaddr: {:#x}\n", __func__, data_packet.instr_id, data_packet.v_address);
   }
@@ -614,11 +807,11 @@ bool O3_CPU::execute_load(const LSQ_ENTRY& lq_entry)
 void O3_CPU::do_complete_execution(ooo_model_instr& instr)
 {
   for (auto dreg : instr.destination_registers) {
-    auto begin = std::begin(reg_producers[dreg]);
-    auto end = std::end(reg_producers[dreg]);
+    auto begin = std::begin(reg_producers[instr.trace_id][dreg]);
+    auto end = std::end(reg_producers[instr.trace_id][dreg]);
     auto elem = std::find_if(begin, end, [id = instr.instr_id](ooo_model_instr& x) { return x.instr_id == id; });
     assert(elem != end);
-    reg_producers[dreg].erase(elem);
+    reg_producers[instr.trace_id][dreg].erase(elem);
   }
 
   instr.executed = COMPLETED;
@@ -678,6 +871,7 @@ long O3_CPU::handle_memory_return()
     }
   }
 
+  // marina: there is no need to make changes here. if no LQ entry is found, the response is simly erased.
   auto l1d_it = std::begin(L1D_bus.lower_level->returned);
   for (auto l1d_bw = L1D_BANDWIDTH; l1d_bw > 0 && l1d_it != std::end(L1D_bus.lower_level->returned); --l1d_bw, ++l1d_it) {
     for (auto& lq_entry : LQ) {
@@ -704,7 +898,62 @@ long O3_CPU::retire_rob()
   num_retired += retire_count;
   ROB.erase(retire_begin, retire_end);
 
+  if(ROB.size()) {
+    ROB.front().rob_head_cycle = current_cycle;
+  }
+
+  uint32_t trace_id = ROB.front().trace_id;
+
+  for (int i=0; i<retire_count; i++)
+    instr_to_file_pos.pop_front();
+
+  if (!ROB.empty()) {
+      //std::cout << "head of rob is " << ROB.front().instr_id << ", other is " << instr_to_file_pos.front().instr_id << std::endl;
+      assert(instr_to_file_pos.front().instr_id == ROB.front().instr_id);
+
+      // marina: case where the flush instigator retires before we can flush
+      /*
+      if (ROB[smt_id].front().did_trigger_switch) {
+        if (ROB[smt_id].front().cant_trigger_switch) {
+          //cout << "trigger instr " << ROB[smt_id].front().instr_id << " from trace " << ROB[smt_id].front().trace_id << " now retired at cycle " << current_cycle << endl;
+        }
+        else {
+          switch_condition_met[trace_id] = false;
+          do_pipeline_flush[trace_id] = false;
+          greedy_start = false;
+          issue_mlp = 0;
+          cost_accumulator = 0;
+          counter = 0;
+          //cout << "instr " << ROB[smt_id].front().instr_id << " from trace " << trace_id << " retired" << endl;
+        }
+        //cout << "instr " << ROB[smt_id].front().instr_id << " from trace " << trace_id << " retired" << endl;
+      }
+      */
+
+      if (retire_count < RETIRE_WIDTH) {
+        retire_bubbles += (RETIRE_WIDTH - retire_count);
+        uint32_t blocked_on_ld = 0, blocked_on_llc = 0;
+          
+        if (flush_allowed && switch_point == ON_BLOCK_ROB 
+            && !ROB.empty() 
+            && cur_fetch_id == trace_id 
+            && !ROB.front().cant_trigger_switch 
+            && !switch_condition_met[trace_id] 
+            && !context_switch
+            && !ROB.front().source_memory.empty() && !warmup && !ROB.front().is_warmup
+            && ROB.front().went_offchip) {
+              flush_it = ROB.begin();
+              do_pipeline_flush[trace_id] = true;
+              switch_condition_met[trace_id] = true;
+              ROB.front().did_trigger_switch = 1;
+              //std::cout << "in rob retire, instr id " << ROB.front().instr_id << " triggered a switch at cycle " << current_cycle << std::endl;
+        }
+      }
+  }
+  
+
   return retire_count;
+
 }
 
 // LCOV_EXCL_START Exclude the following function from LCOV
@@ -750,7 +999,14 @@ LSQ_ENTRY::LSQ_ENTRY(uint64_t id, uint64_t addr, uint64_t local_ip, std::array<u
 
 void LSQ_ENTRY::finish(std::deque<ooo_model_instr>::iterator begin, std::deque<ooo_model_instr>::iterator end) const
 {
-  auto rob_entry = std::partition_point(begin, end, [id = this->instr_id](auto x) { return x.instr_id < id; });
+  //auto rob_entry = std::partition_point(begin, end, [id = this->instr_id](auto x) { return x.instr_id < id; });
+  std::deque<ooo_model_instr>::iterator rob_entry;
+  for (auto it = begin; it != end; it++) {
+    if (it->instr_id == this->instr_id) {
+      rob_entry = it;
+      break;
+    }
+  }
   assert(rob_entry != end);
   assert(rob_entry->instr_id == this->instr_id);
 

@@ -57,6 +57,8 @@ class tracereader
   std::unique_ptr<reader_concept> pimpl_;
 
 public:
+  uint64_t trace_id = 0;
+
   template <typename T>
   tracereader(T&& val) : pimpl_(std::make_unique<reader_model<T>>(std::move(val)))
   {
@@ -66,6 +68,7 @@ public:
   {
     auto retval = (*pimpl_)();
     retval.instr_id = instr_unique_id++;
+    retval.trace_id = trace_id;
     return retval;
   }
 
@@ -123,7 +126,7 @@ ooo_model_instr bulk_tracereader<T, F>::operator()()
     // Inflate trace format into core model instructions
     auto begin = std::begin(trace_read_buf);
     auto end = std::next(begin, bytes_read / sizeof(T));
-    std::transform(begin, end, std::back_inserter(instr_buffer), [cpu = this->cpu](T t) { return ooo_model_instr{cpu, t}; });
+    std::transform(begin, end, std::back_inserter(instr_buffer), [cpu = this->cpu](T t) { return ooo_model_instr{cpu, t, cpu}; });
 
     // Set branch targets
     set_branch_targets(std::begin(instr_buffer), std::end(instr_buffer));

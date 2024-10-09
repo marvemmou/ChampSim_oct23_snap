@@ -71,9 +71,23 @@ struct ooo_model_instr {
   // these are indices of instructions in the ROB that depend on me
   std::vector<std::reference_wrapper<ooo_model_instr>> registers_instrs_depend_on_me;
 
+  uint32_t trace_id = 0;
+
+  uint64_t rob_head_cycle = 0;
+
+  // did this instr trigger a switch?
+  bool did_trigger_switch = 0;
+  // should this instr be able to trigger a switch? default is 0
+  bool cant_trigger_switch = 0;
+  
+  bool went_offchip = 0, went_offchip_pred = 0;
+
+  bool is_cxl = false;
+  bool is_warmup = false;
+
 private:
   template <typename T>
-  ooo_model_instr(T instr, std::array<uint8_t, 2> local_asid) : ip(instr.ip), is_branch(instr.is_branch), branch_taken(instr.branch_taken), asid(local_asid)
+  ooo_model_instr(T instr, std::array<uint8_t, 2> local_asid, uint32_t tid) : ip(instr.ip), is_branch(instr.is_branch), branch_taken(instr.branch_taken), asid(local_asid), trace_id(tid)
   {
     std::remove_copy(std::begin(instr.destination_registers), std::end(instr.destination_registers), std::back_inserter(this->destination_registers), 0);
     std::remove_copy(std::begin(instr.source_registers), std::end(instr.source_registers), std::back_inserter(this->source_registers), 0);
@@ -89,6 +103,16 @@ private:
       return r != champsim::REG_STACK_POINTER && r != champsim::REG_FLAGS && r != champsim::REG_INSTRUCTION_POINTER;
     });
 
+    for (uint32_t i = 0; i < destination_memory.size(); i++) {
+      destination_memory[i] = (((destination_memory[i] << 5) >> 5) | (((uint64_t)trace_id) << 59));
+    }
+
+    for (int i = 0; i < source_memory.size(); i++) {
+      source_memory[i] = (((source_memory[i] << 5) >> 5) | (((uint64_t)trace_id) << 59));
+    }
+
+    ip = (((ip << 5) >> 5) | (((uint64_t)trace_id) << 59));
+    
     // determine what kind of branch this is, if any
     if (!reads_sp && !reads_flags && writes_ip && !reads_other) {
       // direct jump
@@ -131,8 +155,8 @@ private:
   }
 
 public:
-  ooo_model_instr(uint8_t cpu, input_instr instr) : ooo_model_instr(instr, {cpu, cpu}) {}
-  ooo_model_instr(uint8_t, cloudsuite_instr instr) : ooo_model_instr(instr, {instr.asid[0], instr.asid[1]}) {}
+  ooo_model_instr(uint8_t cpu, input_instr instr, uint32_t tid) : ooo_model_instr(instr, {cpu, cpu},tid) {}
+  ooo_model_instr(uint8_t, cloudsuite_instr instr, uint32_t tid) : ooo_model_instr(instr, {instr.asid[0], instr.asid[1]},tid) {}
 
   std::size_t num_mem_ops() const { return std::size(destination_memory) + std::size(source_memory); }
 
