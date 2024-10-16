@@ -51,7 +51,7 @@ long MEMORY_CONTROLLER::operate()
     if (warmup) {
       for (auto& entry : channel.RQ) {
         if (entry.has_value()) {
-          response_type response{entry->address, entry->v_address, entry->data, entry->pf_metadata, entry->instr_id, entry->trace_id, entry->instr_depend_on_me};
+          response_type response{entry->address, entry->v_address, entry->data, entry->pf_metadata, entry->instr_id, entry->trace_id, entry->instr_depend_on_me, 0, "DRAM"};
           for (auto ret : entry.value().to_return)
             ret->push_back(response);
 
@@ -76,7 +76,7 @@ long MEMORY_CONTROLLER::operate()
       response_type response{channel.active_request->pkt->value().address, channel.active_request->pkt->value().v_address,
                              channel.active_request->pkt->value().data, channel.active_request->pkt->value().pf_metadata,
                              channel.active_request->pkt->value().instr_id, channel.active_request->pkt->value().trace_id,
-                             channel.active_request->pkt->value().instr_depend_on_me};
+                             channel.active_request->pkt->value().instr_depend_on_me, 0, "DRAM"};
       for (auto ret : channel.active_request->pkt->value().to_return)
         ret->push_back(response);
 
@@ -254,7 +254,7 @@ void DRAM_CHANNEL::check_collision()
       if (auto wq_it = std::find_if(std::begin(WQ), std::end(WQ), checker); wq_it != std::end(WQ)) {
         response_type response{rq_it->value().address, rq_it->value().v_address, rq_it->value().data, rq_it->value().pf_metadata,
                                 rq_it->value().instr_id, rq_it->value().trace_id,
-                               rq_it->value().instr_depend_on_me};
+                               rq_it->value().instr_depend_on_me, 0, "DRAM Collision"};
         response.data = wq_it->value().data;
         for (auto ret : rq_it->value().to_return)
           ret->push_back(response);
