@@ -602,7 +602,8 @@ long O3_CPU::dispatch_instruction()
     DISPATCH_BUFFER.pop_front();
     do_memory_scheduling(ROB.back());
 
-    bool prediction = false;
+    //bool prediction = (crit_pred_table[ROB.back().ip].crit_count/crit_cnt[CRIT] > 0.04);
+    bool prediction = true;
     auto trace_id = ROB.back().trace_id;
 
     if (prediction && flush_allowed && switch_point == ON_DISPATCH 
@@ -931,21 +932,34 @@ long O3_CPU::retire_rob()
   auto retire_count = std::distance(retire_begin, retire_end);
   num_retired += retire_count;
   
+  sim_stats.retire_cnt_distr[retire_count]++;
+
   // Check instruction at the head of the ROB if it is critical
   auto rob_head = std::begin(ROB);
-  rob_head->critical_cycles++; // # Cycles this instr has blocked head, if not blocked value is 0/1
+  if (retire_count == 0) rob_head->critical_cycles++; // # Cycles this instr has blocked head, if not blocked value is 0/1
+
+  if (retire_count == 0) sim_stats.crit_cycles_thr0[rob_head->trace_id]++;
 
   for (auto commit_inst=retire_begin; commit_inst < retire_end; commit_inst++) {
+    assert(retire_count>0);
+    //std::cout << "Ret Tid " << commit_inst->trace_id << std::endl;
+
     auto retire_inst = *commit_inst;
     uint64_t idx = retire_inst.ip & (table_size - 1);
 
+    if (retire_inst.critical_cycles > 0) sim_stats.crit_cycles_thr[retire_inst.trace_id]+=retire_inst.critical_cycles;
     // ------------ Load specific ------------ 
     if (retire_inst.source_memory.size()>0) {
       LOAD_OUTCOME load_outcome;
 
       // Critical Instruction
-      if (retire_inst.critical_cycles > 1) {
+      if (retire_inst.critical_cycles > 0) {
+        if (retire_inst.hit_level == "cpu0_L1D") sim_stats.crit_type[retire_inst.trace_id][L1]+=retire_inst.critical_cycles;
+        else if (retire_inst.hit_level == "cpu0_L2C") sim_stats.crit_type[retire_inst.trace_id][L2]+=retire_inst.critical_cycles;
+        else if (retire_inst.hit_level == "LLC") sim_stats.crit_type[retire_inst.trace_id][LLC]+=retire_inst.critical_cycles;
+
         if (retire_inst.hit_level == "DRAM") {  // Critical miss
+          sim_stats.crit_type[retire_inst.trace_id][DRAM]+=retire_inst.critical_cycles;
           load_outcome = CRIT;
           for (int i=0; i<CRIT_METRIC_COUNT; i++) {
             if (retire_inst.preds.crit_predictions[i]) {
@@ -990,6 +1004,11 @@ long O3_CPU::retire_rob()
       }
     }
     // ~~~~~~~~~~~~~~ Load specific ~~~~~~~~~~~~~~
+    else if (retire_inst.critical_cycles > 0) {
+      if (retire_inst.destination_memory.size()>0) sim_stats.crit_type[retire_inst.trace_id][ST]+=retire_inst.critical_cycles;
+      else if (retire_inst.is_branch) sim_stats.crit_type[retire_inst.trace_id][BR]+=retire_inst.critical_cycles;
+      else sim_stats.crit_type[retire_inst.trace_id][EX]+=retire_inst.critical_cycles;
+    }
 
     uint64_t llsr_size = 512;
     

@@ -45,6 +45,7 @@
 #include <fstream>
 
 enum STATUS { INFLIGHT = 1, COMPLETED = 2 };
+enum INST_TYPE { L1 = 0, L2 = 1, LLC = 2, DRAM = 3, ST = 4, BR = 5, EX = 6, INST_TYPE_CNT = 7 };
 
 class CACHE;
 class CacheBus
@@ -82,6 +83,10 @@ struct cpu_stats {
   CR_STATS CR_stats[CRIT_METRIC_COUNT];   // Crit predictor stats
   CRITICALITY_STATS crit_stats[CRIT_TYPE_COUNT] = {};   // Global crit stats
   std::map<uint64_t, per_load_stats> per_load_stat;
+  double retire_cnt_distr[9] = {0};
+  double crit_cycles_thr0[2] = {0};
+  double crit_cycles_thr[2] = {0};
+  double crit_type[2][9] = {0};  // ld, st, br, ex
 
   MLP_STATS MLP_stats;
 };
