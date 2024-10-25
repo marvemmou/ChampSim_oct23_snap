@@ -33,8 +33,50 @@
 
 std::chrono::seconds elapsed_time();
 
+ADDRESS_STATUS O3_CPU::get_address_status(uint32_t cpu, uint64_t v_address, uint64_t instr_id)
+{ 
+  // First check if any LQ entry has requested the same cache line before, if so, return L1D
+  if (instr_id != 0) {
+    for (auto& lq_entry : LQ) {
+      if (lq_entry.has_value() && lq_entry->instr_id != instr_id && lq_entry->virtual_address >> LOG2_BLOCK_SIZE == v_address >> LOG2_BLOCK_SIZE) return L1D;
+    }
+  }
+
+  // Get the physical address
+  PageTableWalker& ptw = ptw_view.front().get();
+  auto pt_it = ptw.vmem->vpage_to_ppage_map.find({cpu, v_address >> LOG2_PAGE_SIZE});
+
+  uint64_t paddr;
+  if (pt_it == ptw.vmem->vpage_to_ppage_map.end()) { // page fault
+    return PG_FAULT;
+  } else {
+    paddr = champsim::splice_bits(pt_it->second, v_address, LOG2_PAGE_SIZE);
+  }
+
+  // Check each cache (address can be in multiple caches, return highest level)
+  bool hits[3] = {false}; // L1, L2, LLC
+  for (auto& cache_ref : cache_view) {
+    CACHE& cache = cache_ref.get();
+      // access cache
+    auto [set_begin, set_end] = cache.get_set_span(paddr);
+    auto way = std::find_if(set_begin, set_end,
+                            [match = paddr >> cache.OFFSET_BITS, shamt = cache.OFFSET_BITS](const auto& entry) { return (entry.address >> shamt) == match; });
+    bool hit = (way != set_end);
+
+    if (cache.NAME == "cpu0_L1D") hits[0] = hit;
+    else if (cache.NAME == "cpu0_L2C") hits[1] = hit;
+    else if (cache.NAME == "LLC") hits[2] = hit;
+  }
+
+  if (hits[0]) return L1D;
+  else if (hits[1]) return L2C;
+  else if (hits[2]) return L3;
+  else return DRAM_;
+}
+
 long O3_CPU::operate()
 {
+  //champsim::operable
   long progress{0};
 
   progress += retire_rob();                    // retire
@@ -602,8 +644,13 @@ long O3_CPU::dispatch_instruction()
     DISPATCH_BUFFER.pop_front();
     do_memory_scheduling(ROB.back());
 
+    ADDRESS_STATUS addr_status = NA;
+    if (ROB.back().source_memory.size() > 0) {
+      addr_status = get_address_status(cpu, ROB.back().source_memory[0], ROB.back().instr_id);
+    }
+
     //bool prediction = (crit_pred_table[ROB.back().ip].crit_count/crit_cnt[CRIT] > 0.04);
-    bool prediction = true;
+    bool prediction = false;
     auto trace_id = ROB.back().trace_id;
 
     if (prediction && flush_allowed && switch_point == ON_DISPATCH 

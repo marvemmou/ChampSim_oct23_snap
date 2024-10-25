@@ -44,6 +44,8 @@ class PageTableWalker : public champsim::operable
   using request_type = typename channel_type::request_type;
   using response_type = typename channel_type::response_type;
 
+public:
+
   struct mshr_type {
     uint64_t address = 0;
     uint64_t v_address = 0;
@@ -77,7 +79,6 @@ class PageTableWalker : public champsim::operable
 
   void finish_packet(const response_type& packet);
 
-public:
   const std::string NAME;
   const uint32_t MSHR_SIZE;
   const long int MAX_READ, MAX_FILL;

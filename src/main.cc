@@ -117,6 +117,8 @@ int main(int argc, char** argv)
     cpu.switch_policy = switch_policy;
     cpu.is_cgmt = is_cgmt;
     cpu.num_traces = traces.size();
+    cpu.cache_view = gen_environment.cache_view();
+    cpu.ptw_view = gen_environment.ptw_view();
   }
 
   fmt::print("\n*** ChampSim Multicore Out-of-Order Simulator ***\nWarmup Instructions: {}\nSimulation Instructions: {}\nNumber of CPUs: {}\nPage size: {}\n\n",

@@ -22,6 +22,7 @@
 #include "champsim_constants.h"
 #include "dram_controller.h"
 #include <fmt/core.h>
+#include <iostream>
 
 VirtualMemory::VirtualMemory(uint64_t page_table_page_size, std::size_t page_table_levels, uint64_t minor_penalty, MEMORY_CONTROLLER& dram)
     : next_ppage(VMEM_RESERVE_CAPACITY), last_ppage(1ull << (LOG2_PAGE_SIZE + champsim::lg2(page_table_page_size / PTE_BYTES) * page_table_levels)),
@@ -67,7 +68,7 @@ std::pair<uint64_t, uint64_t> VirtualMemory::va_to_pa(uint32_t cpu_num, uint64_t
   if constexpr (champsim::debug_print) {
     fmt::print("[VMEM] {} paddr: {:x} vaddr: {:x} fault: {}\n", __func__, paddr, vaddr, fault);
   }
-
+  if (vaddr == 10281872) std::cout << "va_to_pa- vaddr: " << vaddr << " paddr: " << paddr << " ppage: " << ppage->second << std::endl;
   return {paddr, fault ? minor_fault_penalty : 0};
 }
 

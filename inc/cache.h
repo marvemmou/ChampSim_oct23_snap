@@ -147,6 +147,7 @@ class CACHE : public champsim::operable
   };
   using set_type = std::vector<BLOCK>;
 
+  public:
   std::pair<set_type::iterator, set_type::iterator> get_set_span(uint64_t address);
   std::pair<set_type::const_iterator, set_type::const_iterator> get_set_span(uint64_t address) const;
   std::size_t get_set_index(uint64_t address) const;
@@ -161,7 +162,6 @@ class CACHE : public champsim::operable
   std::deque<tag_lookup_type> inflight_tag_check{};
   std::deque<tag_lookup_type> translation_stash{};
 
-public:
   std::vector<channel_type*> upper_levels;
   channel_type* lower_level;
   channel_type* lower_translate;

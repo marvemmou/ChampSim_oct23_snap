@@ -41,13 +41,17 @@
 #include "operable.h"
 #include "util/lru_table.h"
 #include <type_traits>
+#include "ptw.h"
+#include "cache.h"
+#include "vmem.h"
 
 #include <fstream>
 
 enum STATUS { INFLIGHT = 1, COMPLETED = 2 };
 enum INST_TYPE { L1 = 0, L2 = 1, LLC = 2, DRAM = 3, ST = 4, BR = 5, EX = 6, INST_TYPE_CNT = 7 };
+enum ADDRESS_STATUS {L1D, L2C, L3, DRAM_, PG_FAULT, NA};
 
-class CACHE;
+//class CACHE;
 class CacheBus
 {
   using channel_type = champsim::channel;
@@ -123,6 +127,7 @@ struct LSQ_ENTRY {
 class O3_CPU : public champsim::operable
 {
 public:
+
   double crit_cnt[CRIT_TYPE_COUNT] = {0};
   static const uint64_t table_size = 512;
   MISS_PRED_ENTRY miss_pred_table[table_size];
@@ -130,6 +135,9 @@ public:
   uint64_t mlp_pred_table[table_size];
   std::deque<llsr_entry> llsr;
   uint32_t cpu = 0;
+  std::vector<std::reference_wrapper<CACHE>> cache_view;
+  std::vector<std::reference_wrapper<PageTableWalker>> ptw_view;
+
 
   // cycle
   uint64_t begin_phase_cycle = 0;
@@ -286,7 +294,7 @@ public:
   void do_finish_store(const LSQ_ENTRY& sq_entry);
   bool do_complete_store(const LSQ_ENTRY& sq_entry);
   bool execute_load(const LSQ_ENTRY& lq_entry);
-
+  ADDRESS_STATUS get_address_status(uint32_t cpu, uint64_t v_address, uint64_t instr_id=0);
   void pipeline_flush();
 
   uint64_t roi_instr() const { return roi_stats.instrs(); }

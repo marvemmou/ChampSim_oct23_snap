@@ -31,7 +31,7 @@ inline constexpr std::size_t PTE_BYTES = 8;
 
 class VirtualMemory
 {
-private:
+public:
   std::map<std::pair<uint32_t, uint64_t>, uint64_t> vpage_to_ppage_map;
   std::map<std::tuple<uint32_t, uint64_t, uint32_t>, uint64_t> page_table;
 
@@ -43,7 +43,6 @@ private:
   uint64_t ppage_front() const;
   void ppage_pop();
 
-public:
   const uint64_t minor_fault_penalty;
   const std::size_t pt_levels;
   const uint64_t pte_page_size; // Size of a PTE page
