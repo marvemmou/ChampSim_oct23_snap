@@ -81,9 +81,12 @@ phase_stats do_phase(phase_info phase, environment& env, std::vector<tracereader
         for(auto i=0; i<traces.size(); i++) {
           auto& trace = traces.at(trace_index.at(i));
           
-          for (auto pkt_count = cpu.IN_QUEUE_SIZE - static_cast<long>(std::size(cpu.input_queue[i])); !trace.eof() && pkt_count > 0; --pkt_count)
-            cpu.input_queue[i].push_back(trace());
-
+          for (auto pkt_count = cpu.IN_QUEUE_SIZE - static_cast<long>(std::size(cpu.input_queue[i])); !trace.eof() && pkt_count > 0; --pkt_count) {
+            // offset traces
+            cpu.instrs_per_trace[i]++;
+            if (cpu.instrs_per_trace[i] > i*10000)
+              cpu.input_queue[i].push_back(trace());
+          }
           // If any trace reaches EOF, terminate all phasesb 
           if (trace.eof())
             std::fill(std::begin(next_phase_complete), std::end(next_phase_complete), true);

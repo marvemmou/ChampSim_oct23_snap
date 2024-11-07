@@ -94,6 +94,8 @@ class MEMORY_CONTROLLER : public champsim::operable
 
   // Latencies
   const uint64_t tRP, tRCD, tCAS, DRAM_DBUS_TURN_AROUND_TIME, DRAM_DBUS_RETURN_TIME;
+  const uint64_t tCXL;
+  const uint8_t cxl;
 
   // these values control when to send out a burst of writes
   constexpr static std::size_t DRAM_WRITE_HIGH_WM = ((DRAM_WQ_SIZE * 7) >> 3);         // 7/8th
@@ -107,7 +109,7 @@ class MEMORY_CONTROLLER : public champsim::operable
 public:
   std::array<DRAM_CHANNEL, DRAM_CHANNELS> channels;
 
-  MEMORY_CONTROLLER(double freq_scale, int io_freq, double t_rp, double t_rcd, double t_cas, double turnaround, std::vector<channel_type*>&& ul);
+  MEMORY_CONTROLLER(double freq_scale, int io_freq, double t_rp, double t_rcd, double t_cas, double turnaround, std::vector<channel_type*>&& ul, uint8_t is_cxl, double t_cxl);
 
   void initialize() override final;
   long operate() override final;

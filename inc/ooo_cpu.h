@@ -42,6 +42,7 @@
 #include <type_traits>
 
 #include <fstream>
+#include <atomic>
 
 enum STATUS { INFLIGHT = 1, COMPLETED = 2 };
 
@@ -74,6 +75,8 @@ struct cpu_stats {
 
   uint64_t instrs() const { return end_instrs - begin_instrs; }
   uint64_t cycles() const { return end_cycles - begin_cycles; }
+
+  uint64_t rob_stalls = 0;
 };
 
 struct LSQ_ENTRY {
@@ -130,6 +133,15 @@ public:
   /* per-thread; set to 1 when a switch condition is met, set to 0 when the instigator is retired
         checked in operate to decide whether to call pipeline_flush*/
   bool do_pipeline_flush[16] = {};
+  bool do_context_switch[16] = {};
+  uint64_t instr_until_cs = 0;
+
+  std::vector<std::reference_wrapper<CACHE>>  caches;
+
+  bool in_runahead[16] = {};
+  uint64_t runahead_trace_id = 0;
+  std::atomic<uint64_t> instrs_in_runahead[16] = {};
+
   // per-smt-core; set to the rob_it that caused the switch
   std::deque<ooo_model_instr>::iterator flush_it;
 
@@ -183,8 +195,10 @@ public:
   uint64_t last_flush_cycle = 0, last_retire_cycle = 0;
 
   bool is_cgmt = 0;
+  bool record = 0;
 
-  std::ofstream outfile[16];
+  std::ofstream outfile;
+  std::ifstream infile[16];
   std::ofstream timestamp_file;
 
   mlp_instr instigator;
@@ -227,6 +241,9 @@ public:
   // 1 input queue per thread on a core
   std::deque<ooo_model_instr> input_queue[16];
 
+  std::deque<ooo_model_instr> oracle_queue[16];
+  std::deque<ooo_model_instr> to_core_queue[16];
+
   CacheBus L1I_bus, L1D_bus;
   CACHE* l1i;
 
@@ -264,6 +281,7 @@ public:
   bool execute_load(const LSQ_ENTRY& lq_entry);
 
   void pipeline_flush();
+  void mark_register_dependencies(ooo_model_instr& instr);
 
   uint64_t roi_instr() const { return roi_stats.instrs(); }
   uint64_t roi_cycle() const { return roi_stats.cycles(); }

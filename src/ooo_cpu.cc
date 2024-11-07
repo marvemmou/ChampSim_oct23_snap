@@ -31,6 +31,10 @@
 #include <fmt/core.h>
 #include <fmt/ranges.h>
 
+#include <fstream>
+#include <map>
+#include <set>
+
 std::chrono::seconds elapsed_time();
 
 long O3_CPU::operate()
@@ -185,14 +189,22 @@ void O3_CPU::initialize_instruction()
 
     if(min_it != UINT32_MAX ) {
       
-      if (!replay[min_it].empty()) {
+      if (min_it != cur_trace_id) {
+        num_context_switches[cur_trace_id]++;
+        cur_trace_id = min_it;
+      }
+        
+      cur_fetch_id = min_it;
+
+      if (!in_runahead[min_it] && instrs_in_runahead[min_it]) {
+        return;
+      }
+        
+      if (!in_runahead[min_it] && !replay[min_it].empty()) {
+
         assert(!warmup);
         instrs_to_read_this_cycle--;
-        if (min_it != cur_trace_id) {
-          num_context_switches[cur_trace_id]++;
-          cur_trace_id = min_it;
-        }
-        
+
         auto temp = replay[min_it].back();
         instr_to_file_pos.push_back(temp);
 
@@ -205,7 +217,6 @@ void O3_CPU::initialize_instruction()
         // added to simulate perfect branch prediction
         stop_fetch = false;
 
-        cur_fetch_id = min_it;
       
         if (stop_fetch)
           instrs_to_read_this_cycle = 0;
@@ -214,34 +225,98 @@ void O3_CPU::initialize_instruction()
       }
       else if (!std::empty(input_queue[min_it])){
         instrs_to_read_this_cycle--;
-        
-        if (min_it != cur_trace_id) {
-          num_context_switches[cur_trace_id]++;
-          cur_trace_id = min_it;
-        }
-        auto temp = input_queue[min_it].front();
-        instr_to_file_pos.push_back(temp);
 
         stop_fetch = do_init_instruction(input_queue[min_it].front());
 
         input_queue[min_it].front().trace_id = min_it;
+        if(warmup) {
+          input_queue[min_it].front().is_warmup = true;
+        }
         // added to simulate perfect branch prediction
         stop_fetch = false;
+
+        cur_fetch_id = min_it;
+        mlp_instr test;
         
-        IFETCH_BUFFER.push_back(input_queue[min_it].front());
-        if(warmup) {
-          IFETCH_BUFFER.back().is_warmup = true;
+        ooo_model_instr* arch_instr = &input_queue[min_it].front();
+        
+        if (record) {
+          for (int i=0; i<arch_instr->source_memory.size(); i++)
+            arch_instr->mlp_trace_info.v_address[i] = arch_instr->source_memory[i];
+          arch_instr->mlp_trace_info.ip = arch_instr->ip;
         }
 
+        if (!record && input_queue[min_it].front().mlp_trace_info.ip == 0) {
+          infile[min_it].read(reinterpret_cast<char*>(&input_queue[min_it].front().mlp_trace_info), sizeof(mlp_instr));
+          if (infile[min_it].fail() && !infile[min_it].eof()) {
+            std::cerr << "Error: Failed to read from file!" << std::endl;
+            //assert(0);
+          } else if (infile[min_it].eof()) {
+              std::cout << "Reached the end of the file." << std::endl;
+              //assert(0);
+          }
+          //std::cout << "reading record for trace " << min_it << ", instr " << input_queue[min_it].front().instr_id << 
+          //  " rob_head_c " << input_queue[min_it].front().mlp_trace_info.rob_head_c << ", retired_c " << input_queue[min_it].front().mlp_trace_info.retired_c << std::endl;
+        }
+        
+
+        bool miss = false;
+
+        for (int i=0; i<4; i++)
+          if(input_queue[min_it].front().mlp_trace_info.went_offchip[i] == 1) {
+            //std::cout << "went offchip " << input_queue[min_it].front().mlp_trace_info.went_offchip[i]<< ", completed_c " << input_queue[min_it].front().mlp_trace_info.completed_c[i] <<  std::endl;
+            miss = true;
+            input_queue[min_it].front().llc_miss_pred = true;
+            break;
+          }
+        //if (miss && input_queue[min_it].front().mlp_trace_info.rob_head_c && input_queue[min_it].front().mlp_trace_info.retired_c - input_queue[min_it].front().mlp_trace_info.rob_head_c > FLUSH_PENALTY
+        if (miss 
+          && switch_point == ON_FETCH 
+          && flush_allowed
+          && !context_switch
+          && !switch_condition_met[cur_fetch_id] && !warmup && !input_queue[min_it].front().is_warmup) {
+        
+            assert(!record);
+          //do_pipeline_flush[cur_fetch_id] = true;
+          //switch_condition_met[cur_fetch_id] = true;
+          if (!in_runahead[cur_fetch_id]) {
+            //std::cout << "runahead starting, trace " << cur_fetch_id << ", instr " << input_queue[min_it].front().instr_id << std::endl;
+            in_runahead[cur_fetch_id] = true;
+          }
+          else {
+            // next critical load predicted
+            // context switch the fetching thread
+            // exit runahead
+
+            in_runahead[cur_fetch_id] = false;
+            context_switch = 1;
+            flush_fetch_resume = current_cycle + FLUSH_PENALTY;
+            //std::cout << "runahead ending, trace " << cur_fetch_id << ", instr " << input_queue[min_it].front().instr_id << std::endl;
+            return;
+          }
+          //instrs_to_read_this_cycle = 0;
+          //return;
+        }
+
+
+        instr_to_file_pos.push_back(input_queue[min_it].front());
+  
+        IFETCH_BUFFER.push_back(input_queue[min_it].front());
+        if(record)
+          IFETCH_BUFFER.back().mlp_trace_info.fetch_c = current_cycle;
+
         input_queue[min_it].pop_front();
-              
-        cur_fetch_id = min_it;
-      
+                    
         if (stop_fetch)
           instrs_to_read_this_cycle = 0;
 
         IFETCH_BUFFER.back().event_cycle = current_cycle;
 
+        if (in_runahead[cur_fetch_id]) {
+          IFETCH_BUFFER.back().is_in_runahead = true;
+          instrs_in_runahead[cur_fetch_id]++;
+          //std::cout << "instrs in runahead for trace " << cur_fetch_id << ": " << instrs_in_runahead[cur_fetch_id] << std::endl;
+        }
       }
     } 
   }
@@ -362,7 +437,7 @@ void O3_CPU::pipeline_flush() {
     for (auto dreg : it.destination_registers) {
       auto begin = std::begin(reg_producers[it.trace_id][dreg]);
       auto end = std::end(reg_producers[it.trace_id][dreg]);
-      auto elem = std::find_if(begin, end, [id = it.instr_id, tid = it.trace_id](ooo_model_instr& x) { return x.instr_id == id; });
+      auto elem = std::find_if(begin, end, [id = it.instr_id](ooo_model_instr& x) { return x.instr_id == id; });
       if (elem == end) {        
         assert(it.executed == COMPLETED || it.scheduled != COMPLETED);
       }
@@ -572,6 +647,8 @@ long O3_CPU::dispatch_instruction()
              >= std::size(DISPATCH_BUFFER.front().source_memory))
          && ((std::size(DISPATCH_BUFFER.front().destination_memory) + std::size(SQ)) <= SQ_SIZE)) {
     ROB.push_back(std::move(DISPATCH_BUFFER.front()));
+    if (record)
+      ROB.back().mlp_trace_info.rob_add_c  = current_cycle;
     DISPATCH_BUFFER.pop_front();
     do_memory_scheduling(ROB.back());
 
@@ -613,6 +690,23 @@ long O3_CPU::schedule_instruction()
   return progress;
 }
 
+void O3_CPU::mark_register_dependencies(ooo_model_instr& instr) {
+  for (auto src_reg : instr.source_registers) {
+    if (!std::empty(reg_producers[instr.trace_id][src_reg])) {
+      // get the last of reg producers with the same trace id as me
+      auto prior = std::find_if(reg_producers[instr.trace_id][src_reg].rbegin(), reg_producers[instr.trace_id][src_reg].rend(), [x = instr.instr_id](const ooo_model_instr& check) {
+        return check.instr_id < x;});
+      // prior has valid sources (none of its source producers was retired before execution)
+
+      if (prior!= reg_producers[instr.trace_id][src_reg].rend() && !prior->get().invalid) {
+        // prior (the instr producing its sources) is useful and should be executed
+        prior->get().useful = true;
+        mark_register_dependencies(*prior);
+      }
+    }
+  }
+}
+
 void O3_CPU::do_scheduling(ooo_model_instr& instr)
 {
   // Mark register dependencies
@@ -623,8 +717,16 @@ void O3_CPU::do_scheduling(ooo_model_instr& instr)
       if (prior.registers_instrs_depend_on_me.empty() || prior.registers_instrs_depend_on_me.back().get().instr_id != instr.instr_id) {
         prior.registers_instrs_depend_on_me.push_back(instr);
         instr.num_reg_dependent++;
+        if (!instr.is_in_runahead)
+          assert(!prior.is_in_runahead);
       }
     }
+  }
+
+  // newly scheduled instruction is predicted as a critical load
+  if (instr.llc_miss_pred && !warmup) {
+    mark_register_dependencies(instr);
+
   }
 
   for (auto dreg : instr.destination_registers) {
@@ -681,6 +783,12 @@ void O3_CPU::do_memory_scheduling(ooo_model_instr& instr)
 
     (*q_entry)->trace_id = instr.trace_id;
     (*q_entry)->my_rob_it = &instr;
+    auto it = std::find(instr.source_memory.begin(), instr.source_memory.end(), smem);
+    int index = std::distance(instr.source_memory.begin(), it);
+    (*q_entry)->data_index = index;
+    
+    if (record)
+      instr.mlp_trace_info.schedule_c[index] = current_cycle;
 
     //lq_it->is_cxl = rob_it->is_cxl;
 
@@ -692,7 +800,10 @@ void O3_CPU::do_memory_scheduling(ooo_model_instr& instr)
       if (sq_it->fetch_issued) { // Store already executed
         q_entry->reset();
         ++instr.completed_mem_ops;
-
+        if (record) {
+          instr.mlp_trace_info.completed_c[index] = current_cycle;
+          instr.mlp_trace_info.went_offchip[index] = 0;
+        }
         if constexpr (champsim::debug_print)
           fmt::print("[DISPATCH] {} instr_id: {} forwards_from: {}\n", __func__, instr.instr_id, sq_it->event_cycle);
       } else {
@@ -748,6 +859,8 @@ long O3_CPU::operate_lsq()
         && lq_entry->event_cycle < current_cycle) {
       auto success = execute_load(*lq_entry);
       if (success) {
+        if (record)
+          lq_entry->my_rob_it->mlp_trace_info.issue_c[lq_entry->data_index] = current_cycle;
         --load_bw;
         lq_entry->fetch_issued = true;
       }
@@ -765,6 +878,11 @@ void O3_CPU::do_finish_store(const LSQ_ENTRY& sq_entry)
   for (std::optional<LSQ_ENTRY>& dependent : sq_entry.lq_depend_on_me) {
     assert(dependent.has_value()); // LQ entry is still allocated
     if (dependent->producer_id == sq_entry.instr_id) {
+      if (record) {
+        dependent->my_rob_it->mlp_trace_info.schedule_c[dependent->data_index] = current_cycle;
+        dependent->my_rob_it->mlp_trace_info.completed_c[dependent->data_index] = current_cycle;
+        dependent->my_rob_it->mlp_trace_info.went_offchip[dependent->data_index] = 0;
+      }
       dependent->finish(std::begin(ROB), std::end(ROB));
       dependent.reset();
     }
@@ -877,6 +995,10 @@ long O3_CPU::handle_memory_return()
     for (auto& lq_entry : LQ) {
       if (lq_entry.has_value() && lq_entry->fetch_issued && lq_entry->virtual_address >> LOG2_BLOCK_SIZE == l1d_it->v_address >> LOG2_BLOCK_SIZE) {
         lq_entry->finish(std::begin(ROB), std::end(ROB));
+        if (record) {
+          lq_entry->my_rob_it->mlp_trace_info.completed_c[lq_entry->data_index] = current_cycle;
+          lq_entry->my_rob_it->mlp_trace_info.went_offchip[lq_entry->data_index] = lq_entry->my_rob_it->went_offchip;
+        }
         lq_entry.reset();
         ++progress;
       }
@@ -890,31 +1012,96 @@ long O3_CPU::handle_memory_return()
 
 long O3_CPU::retire_rob()
 {
-  auto [retire_begin, retire_end] = champsim::get_span_p(std::cbegin(ROB), std::cend(ROB), RETIRE_WIDTH, [](const auto& x) { return x.executed == COMPLETED; });
+  auto [retire_begin, retire_end] = champsim::get_span_p(std::cbegin(ROB), std::cend(ROB), RETIRE_WIDTH, [](const auto& x) { return x.executed == COMPLETED || (x.is_in_runahead && !x.useful); });
   if constexpr (champsim::debug_print) {
     std::for_each(retire_begin, retire_end, [](const auto& x) { fmt::print("[ROB] retire_rob instr_id: {} is retired\n", x.instr_id); });
   }
   auto retire_count = std::distance(retire_begin, retire_end);
   num_retired += retire_count;
+
+  auto base = instr_to_file_pos.front();
+  int k = 0;
+  for (auto it = ROB.begin(); k<retire_count; k++) {
+    
+    if (it->went_offchip && it->rob_head_cycle != 0) {
+      sim_stats.rob_stalls += (current_cycle - it->rob_head_cycle);
+    }
+
+    if(record && !it->source_memory.empty()) {
+      it->mlp_trace_info.retired_c = current_cycle;
+      for (auto rob_it = ROB.begin(); rob_it != ROB.end(); ++rob_it) {
+        assert(rob_it->instr_id >= ROB.front().instr_id);
+        if (!rob_it->source_memory.empty() && rob_it->went_offchip) {
+                it->mlp_trace_info.mlp[rob_it - ROB.begin()]++;
+        }
+      }
+    }
+
+    if (record) {
+      typename decltype(outfile)::char_type buf[sizeof(mlp_instr)];    
+      std::memcpy(buf, &it->mlp_trace_info, sizeof(mlp_instr));
+      outfile.write(buf, sizeof(mlp_instr));
+    }
+    
+    // runahead instructions are added to the replay buffer
+    if (it->is_in_runahead) {
+      instrs_in_runahead[it->trace_id]--;
+
+      replay[it->trace_id].push_front(base);
+      replay[it->trace_id].front().is_in_runahead = false;
+      replay[it->trace_id].front().cant_trigger_switch = true;
+
+      if (!it->useful) {
+        //std::cout << "retiring useless instr " << it->instr_id << std::endl;
+        for (auto& lq_entry : LQ) {
+          if (lq_entry->instr_id == it->instr_id) {
+            lq_entry.reset();
+          }
+        }
+        for (uint32_t i = 0; i < SQ.size(); i++) {
+          if (it->instr_id == SQ[i].instr_id) {
+            SQ.erase(SQ.begin() + i);
+          }
+        }
+        for (auto dreg : it->destination_registers) {
+          auto begin = std::begin(reg_producers[it->trace_id][dreg]);
+          auto end = std::end(reg_producers[it->trace_id][dreg]);
+          auto elem = std::find_if(begin, end, [id = it->instr_id](ooo_model_instr& x) { return x.instr_id == id; });
+          if (elem == end) {        
+            assert(it->executed == COMPLETED || it->scheduled != COMPLETED);
+          }
+          else {
+            reg_producers[it->trace_id][dreg].erase(elem);
+          }
+        }
+        for (auto x : it->registers_instrs_depend_on_me) {
+          x.get().invalid = true;
+        }
+      }
+    }
+    instr_to_file_pos.pop_front();
+    base = instr_to_file_pos.front();
+    it++;
+  }
+
   ROB.erase(retire_begin, retire_end);
 
-  if(ROB.size()) {
+  if(!ROB.empty() && !ROB.front().source_memory.empty() && retire_count < RETIRE_WIDTH && !ROB.front().rob_head_cycle) {
     ROB.front().rob_head_cycle = current_cycle;
+    if (record)
+      ROB.front().mlp_trace_info.rob_head_c = current_cycle;
   }
 
   uint32_t trace_id = ROB.front().trace_id;
-
-  for (int i=0; i<retire_count; i++)
-    instr_to_file_pos.pop_front();
 
   if (!ROB.empty()) {
       //std::cout << "head of rob is " << ROB.front().instr_id << ", other is " << instr_to_file_pos.front().instr_id << std::endl;
       assert(instr_to_file_pos.front().instr_id == ROB.front().instr_id);
 
       // marina: case where the flush instigator retires before we can flush
-      /*
-      if (ROB[smt_id].front().did_trigger_switch) {
-        if (ROB[smt_id].front().cant_trigger_switch) {
+      
+      if (ROB.front().did_trigger_switch) {
+        if (ROB.front().cant_trigger_switch) {
           //cout << "trigger instr " << ROB[smt_id].front().instr_id << " from trace " << ROB[smt_id].front().trace_id << " now retired at cycle " << current_cycle << endl;
         }
         else {
@@ -927,13 +1114,12 @@ long O3_CPU::retire_rob()
           //cout << "instr " << ROB[smt_id].front().instr_id << " from trace " << trace_id << " retired" << endl;
         }
         //cout << "instr " << ROB[smt_id].front().instr_id << " from trace " << trace_id << " retired" << endl;
-      }
-      */
+      }     
 
       if (retire_count < RETIRE_WIDTH) {
         retire_bubbles += (RETIRE_WIDTH - retire_count);
         uint32_t blocked_on_ld = 0, blocked_on_llc = 0;
-          
+        
         if (flush_allowed && switch_point == ON_BLOCK_ROB 
             && !ROB.empty() 
             && cur_fetch_id == trace_id 
@@ -941,7 +1127,8 @@ long O3_CPU::retire_rob()
             && !switch_condition_met[trace_id] 
             && !context_switch
             && !ROB.front().source_memory.empty() && !warmup && !ROB.front().is_warmup
-            && ROB.front().went_offchip) {
+        }*/
+
               flush_it = ROB.begin();
               do_pipeline_flush[trace_id] = true;
               switch_condition_met[trace_id] = true;

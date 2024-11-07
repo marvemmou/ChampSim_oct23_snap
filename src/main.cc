@@ -71,6 +71,7 @@ int main(int argc, char** argv)
   bool f_allowed = 0;
   uint32_t switch_point = 0, switch_policy = 0;
   bool is_cgmt = 0;
+  bool record = 0;
 
   auto switch_policy_option = app.add_option("-p", switch_policy, "Context switch policy");
   
@@ -79,6 +80,8 @@ int main(int argc, char** argv)
   auto switch_point_option = app.add_option("-s", switch_point, "Context switch point");
   
   app.add_flag("-m", is_cgmt, "Coarse-grain MT");
+
+  app.add_flag("-r", record, "Create MLP record");
 
 
   CLI11_PARSE(app, argc, argv);
@@ -111,12 +114,50 @@ int main(int argc, char** argv)
   for (auto& p : phases)
     std::iota(std::begin(p.trace_index), std::end(p.trace_index), 0);
 
+
+  std::string first_trace = trace_names[0];
+  std::size_t lastSlashPos = first_trace.find_last_of('/');
+  std::size_t lastPeriodPos = first_trace.find_last_of('.');
+  first_trace = first_trace.substr(lastSlashPos + 1, lastPeriodPos - lastSlashPos - 1);
+  first_trace += "_mlp_trace.txt";
+  first_trace = "mlp_traces_1Mistructions/" + first_trace;
+  std::cout << "opened " << first_trace << std::endl;
+  
+
   for (O3_CPU& cpu : gen_environment.cpu_view()) {
     cpu.flush_allowed = f_allowed;
     cpu.switch_point = switch_point;
     cpu.switch_policy = switch_policy;
     cpu.is_cgmt = is_cgmt;
+    cpu.record = record;
     cpu.num_traces = traces.size();
+    cpu.caches = gen_environment.cache_view();
+
+    //cpu.outfile.open(first_trace, std::ios_base::binary);
+   
+    for(auto i=0; i<traces.size(); i++) {
+      //cpu->trace_pos[i] = &traces[i]->start_pos;
+      if (record) {
+        cpu.outfile.open(first_trace, std::ios_base::binary | std::ios_base::trunc);
+        if (cpu.outfile.is_open()) {
+          std::cout << "File opened successfully!" << std::endl;
+          // You can proceed with file operations here
+        } else {
+          std::cout << "Failed to open the file." << std::endl;
+          assert(0);
+        }
+      }
+      else {
+        cpu.infile[i].open(first_trace, std::ios_base::binary); // | std::ios_base::trunc);
+        if (cpu.infile[i].is_open()) {
+          std::cout << "File opened successfully!" << std::endl;
+          // You can proceed with file operations here
+        } else {
+          std::cout << "Failed to open the file." << std::endl;
+          //assert(0);
+        }
+      }
+    }
   }
 
   fmt::print("\n*** ChampSim Multicore Out-of-Order Simulator ***\nWarmup Instructions: {}\nSimulation Instructions: {}\nNumber of CPUs: {}\nPage size: {}\n\n",
@@ -127,6 +168,16 @@ int main(int argc, char** argv)
   auto phase_stats = champsim::main(gen_environment, phases, traces);
 
   fmt::print("\nChampSim completed all CPUs\n\n");
+
+  for (O3_CPU& cpu : gen_environment.cpu_view()) {
+      cpu.timestamp_file.close(); 
+      if (record)
+        cpu.outfile.close();
+      else {
+      for(auto i=0; i<traces.size(); i++) 
+          cpu.infile[i].close();
+      }
+  }
 
   champsim::plain_printer{std::cout}.print(phase_stats);
 
