@@ -644,9 +644,8 @@ long O3_CPU::dispatch_instruction()
     DISPATCH_BUFFER.pop_front();
     do_memory_scheduling(ROB.back());
 
-    ADDRESS_STATUS addr_status = NA;
     if (ROB.back().source_memory.size() > 0) {
-      addr_status = get_address_status(cpu, ROB.back().source_memory[0], ROB.back().instr_id);
+      ROB.back().addr_status = get_address_status(cpu, ROB.back().source_memory[0], ROB.back().instr_id);
     }
 
     //bool prediction = (crit_pred_table[ROB.back().ip].crit_count/crit_cnt[CRIT] > 0.04);
@@ -1027,6 +1026,7 @@ long O3_CPU::retire_rob()
       sim_stats.per_load_stat[retire_inst.ip].cnt[load_outcome]++;
       sim_stats.crit_stats[load_outcome] += retire_inst;
       sim_stats.crit_stats[load_outcome].cnt++; 
+      sim_stats.crit_stats[load_outcome].addr_status[retire_inst.addr_status]++;
 
       crit_pred_table[retire_inst.ip].crit_cycles += retire_inst.critical_cycles;
       crit_pred_table[retire_inst.ip].occ++;

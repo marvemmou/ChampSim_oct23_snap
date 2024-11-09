@@ -68,7 +68,7 @@ std::pair<uint64_t, uint64_t> VirtualMemory::va_to_pa(uint32_t cpu_num, uint64_t
   if constexpr (champsim::debug_print) {
     fmt::print("[VMEM] {} paddr: {:x} vaddr: {:x} fault: {}\n", __func__, paddr, vaddr, fault);
   }
-  if (vaddr == 10281872) std::cout << "va_to_pa- vaddr: " << vaddr << " paddr: " << paddr << " ppage: " << ppage->second << std::endl;
+  //if (vaddr == 10281872) std::cout << "va_to_pa- vaddr: " << vaddr << " paddr: " << paddr << " ppage: " << ppage->second << std::endl;
   return {paddr, fault ? minor_fault_penalty : 0};
 }
 

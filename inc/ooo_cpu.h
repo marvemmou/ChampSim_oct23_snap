@@ -49,7 +49,6 @@
 
 enum STATUS { INFLIGHT = 1, COMPLETED = 2 };
 enum INST_TYPE { L1 = 0, L2 = 1, LLC = 2, DRAM = 3, ST = 4, BR = 5, EX = 6, INST_TYPE_CNT = 7 };
-enum ADDRESS_STATUS {L1D, L2C, L3, DRAM_, PG_FAULT, NA};
 
 //class CACHE;
 class CacheBus

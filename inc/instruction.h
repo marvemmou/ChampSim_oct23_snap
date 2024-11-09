@@ -40,6 +40,7 @@ enum branch_type {
 };
 
 enum CRIT_PRED_METRICS { IPC, ISSUE_RATE, FREQ, FREQ_2, FREQ_7, FREQ_RESET, CRIT_METRIC_COUNT};
+enum ADDRESS_STATUS {L1D, L2C, L3, DRAM_, PG_FAULT, NA};
 
 struct PREDS
 {
@@ -53,6 +54,7 @@ struct ooo_model_instr {
   uint64_t ip = 0;
   uint64_t event_cycle = 0;
 
+  ADDRESS_STATUS addr_status = NA;
   PREDS preds;
   std::string hit_level = "NONE";
   uint64_t exec_cycle = 0;

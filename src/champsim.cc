@@ -48,7 +48,7 @@ phase_stats do_phase(phase_info phase, environment& env, std::vector<tracereader
     op.warmup = is_warmup;
     op.begin_phase();
   }
-
+  uint64_t thread_offset=0;
   // Perform phase
   int stalled_cycle{0};
   std::vector<bool> phase_complete(std::size(env.cpu_view()), false);
@@ -80,9 +80,9 @@ phase_stats do_phase(phase_info phase, environment& env, std::vector<tracereader
       if(cpu.is_cgmt) {
         for(auto i=0; i<traces.size(); i++) {
           auto& trace = traces.at(trace_index.at(i));
-          
-          for (auto pkt_count = cpu.IN_QUEUE_SIZE - static_cast<long>(std::size(cpu.input_queue[i])); !trace.eof() && pkt_count > 0; --pkt_count)
-            cpu.input_queue[i].push_back(trace());
+          if (i != 0 || thread_offset == 0)
+            for (auto pkt_count = cpu.IN_QUEUE_SIZE - static_cast<long>(std::size(cpu.input_queue[i])); !trace.eof() && pkt_count > 0; --pkt_count)
+              cpu.input_queue[i].push_back(trace());
 
           // If any trace reaches EOF, terminate all phasesb 
           if (trace.eof())
@@ -118,6 +118,7 @@ phase_stats do_phase(phase_info phase, environment& env, std::vector<tracereader
     }
 
     phase_complete = next_phase_complete;
+    if (thread_offset > 0) thread_offset--;
   }
 
   for (O3_CPU& cpu : env.cpu_view()) {

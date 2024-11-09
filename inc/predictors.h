@@ -34,6 +34,7 @@ class CRITICALITY_STATS {
     double crit_cycles = 0;   
     double crit_dist = 0;
     double crit_density = 0;
+    double addr_status[NA] = {0};
 
     CRITICALITY_STATS& operator+=(ooo_model_instr const& instr) {
       crit_cycles += instr.critical_cycles;
