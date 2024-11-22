@@ -77,6 +77,10 @@ struct cpu_stats {
   uint64_t cycles() const { return end_cycles - begin_cycles; }
 
   uint64_t rob_stalls = 0;
+  uint64_t num_context_switches = 0;
+  uint64_t num_of_useless_instructions = 0;
+  uint64_t num_of_useful_instructions = 0;
+  uint64_t num_of_runahead_instructions = 0;
 };
 
 struct LSQ_ENTRY {
@@ -140,7 +144,6 @@ public:
 
   bool in_runahead[16] = {};
   uint64_t runahead_trace_id = 0;
-  std::atomic<uint64_t> instrs_in_runahead[16] = {};
 
   // per-smt-core; set to the rob_it that caused the switch
   std::deque<ooo_model_instr>::iterator flush_it;
@@ -200,6 +203,8 @@ public:
   std::ofstream outfile;
   std::ifstream infile[16];
   std::ofstream timestamp_file;
+
+  uint64_t instrs_per_trace[16] = {};
 
   mlp_instr instigator;
   uint64_t issue_mlp = 0;

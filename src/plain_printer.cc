@@ -41,6 +41,12 @@ void champsim::plain_printer::print(O3_CPU::stats_type stats)
              (100.0 * std::ceil(total_branch - total_mispredictions)) / total_branch, (1000.0 * total_mispredictions) / std::ceil(stats.instrs()),
              std::ceil(stats.total_rob_occupancy_at_branch_mispredict) / total_mispredictions);
 
+  fmt::print(stream, "{} ROB stalls due to an llc miss: {}\n", stats.name, stats.rob_stalls);
+  fmt::print(stream, "{} Context Switches: {}\n", stats.name, stats.num_context_switches);
+  fmt::print(stream, "{} Instructions retired during runahead without executing: {}\n", stats.name, stats.num_of_useless_instructions);
+  fmt::print(stream, "{} Instructions retired during runahead after executing: {}\n", stats.name, stats.num_of_useful_instructions);
+  fmt::print(stream, "{} Instructions retired in runahead: {}\n", stats.name, stats.num_of_runahead_instructions);
+
   std::vector<double> mpkis;
   std::transform(std::begin(stats.branch_type_misses), std::end(stats.branch_type_misses), std::back_inserter(mpkis),
                  [instrs = stats.instrs()](auto x) { return 1000.0 * std::ceil(x) / std::ceil(instrs); });

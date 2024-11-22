@@ -176,6 +176,7 @@ void O3_CPU::initialize_instruction()
             context_switch = 0;
             min_it = next_trace_id;
             next_trace_id = (next_trace_id+1)%num_traces;
+            sim_stats.num_context_switches++;
           }
           //cout << "switching threads, currently was fetching from " << cur_trace_id <<  endl;
         }
@@ -196,10 +197,7 @@ void O3_CPU::initialize_instruction()
         
       cur_fetch_id = min_it;
 
-      if (!in_runahead[min_it] && instrs_in_runahead[min_it]) {
-        return;
-      }
-        
+
       if (!in_runahead[min_it] && !replay[min_it].empty()) {
 
         assert(!warmup);
@@ -222,6 +220,9 @@ void O3_CPU::initialize_instruction()
           instrs_to_read_this_cycle = 0;
 
         IFETCH_BUFFER.back().event_cycle = current_cycle;
+        IFETCH_BUFFER.back().instr_id = unique_instr_id;
+        instr_to_file_pos.back().instr_id = unique_instr_id;
+        unique_instr_id++;
       }
       else if (!std::empty(input_queue[min_it])){
         instrs_to_read_this_cycle--;
@@ -312,9 +313,21 @@ void O3_CPU::initialize_instruction()
 
         IFETCH_BUFFER.back().event_cycle = current_cycle;
 
+        // move instr_id generation from tracereader to here to ensure that we always have ascending instr_ids for replay
+        IFETCH_BUFFER.back().instr_id = unique_instr_id;
+        instr_to_file_pos.back().instr_id = unique_instr_id;
+        unique_instr_id++;
+
         if (in_runahead[cur_fetch_id]) {
+          
+          sim_stats.num_of_runahead_instructions++;
+
           IFETCH_BUFFER.back().is_in_runahead = true;
-          instrs_in_runahead[cur_fetch_id]++;
+
+          replay[cur_fetch_id].push_front(IFETCH_BUFFER.back());
+          replay[cur_fetch_id].front().is_in_runahead = false;
+          replay[cur_fetch_id].front().cant_trigger_switch = true;
+
           //std::cout << "instrs in runahead for trace " << cur_fetch_id << ": " << instrs_in_runahead[cur_fetch_id] << std::endl;
         }
       }
@@ -715,10 +728,13 @@ void O3_CPU::do_scheduling(ooo_model_instr& instr)
       // get the last of reg producers with the same trace id as me
       ooo_model_instr& prior = reg_producers[instr.trace_id][src_reg].back();
       if (prior.registers_instrs_depend_on_me.empty() || prior.registers_instrs_depend_on_me.back().get().instr_id != instr.instr_id) {
-        prior.registers_instrs_depend_on_me.push_back(instr);
-        instr.num_reg_dependent++;
-        if (!instr.is_in_runahead)
-          assert(!prior.is_in_runahead);
+        if (instr.is_in_runahead || !prior.is_in_runahead) {
+          prior.registers_instrs_depend_on_me.push_back(instr);
+          instr.num_reg_dependent++;
+        }
+
+        //if (!instr.is_in_runahead)
+        //  assert(!prior.is_in_runahead);
       }
     }
   }
@@ -744,10 +760,13 @@ long O3_CPU::execute_instruction()
 {
   auto exec_bw = EXEC_WIDTH;
   for (auto rob_it = std::begin(ROB); rob_it != std::end(ROB) && exec_bw > 0; ++rob_it) {
-    if (rob_it->scheduled == COMPLETED && rob_it->executed == 0 && rob_it->num_reg_dependent == 0 && rob_it->event_cycle <= current_cycle) {
+    if (!rob_it->invalid && rob_it->scheduled == COMPLETED && rob_it->executed == 0 && rob_it->num_reg_dependent == 0 && rob_it->event_cycle <= current_cycle) {
       do_execution(*rob_it);
       --exec_bw;
     }
+    if (rob_it->invalid)
+      assert(rob_it->is_in_runahead);
+    //  std::cout << "skipping execution of " << rob_it->instr_id << std::endl;
   }
 
   return EXEC_WIDTH - exec_bw;
@@ -1012,7 +1031,7 @@ long O3_CPU::handle_memory_return()
 
 long O3_CPU::retire_rob()
 {
-  auto [retire_begin, retire_end] = champsim::get_span_p(std::cbegin(ROB), std::cend(ROB), RETIRE_WIDTH, [](const auto& x) { return x.executed == COMPLETED || (x.is_in_runahead && !x.useful); });
+  auto [retire_begin, retire_end] = champsim::get_span_p(std::cbegin(ROB), std::cend(ROB), RETIRE_WIDTH, [](const auto& x) { return x.executed == COMPLETED || (x.is_in_runahead && (!x.useful || x.invalid)); });
   if constexpr (champsim::debug_print) {
     std::for_each(retire_begin, retire_end, [](const auto& x) { fmt::print("[ROB] retire_rob instr_id: {} is retired\n", x.instr_id); });
   }
@@ -1043,16 +1062,13 @@ long O3_CPU::retire_rob()
       outfile.write(buf, sizeof(mlp_instr));
     }
     
-    // runahead instructions are added to the replay buffer
     if (it->is_in_runahead) {
-      instrs_in_runahead[it->trace_id]--;
+      //this is to make sure the stats aren't skewed and the phase counting is correct
+      num_retired--;
 
-      replay[it->trace_id].push_front(base);
-      replay[it->trace_id].front().is_in_runahead = false;
-      replay[it->trace_id].front().cant_trigger_switch = true;
-
-      if (!it->useful) {
+      if (!it->useful || it->invalid) {
         //std::cout << "retiring useless instr " << it->instr_id << std::endl;
+        sim_stats.num_of_useless_instructions++;
         for (auto& lq_entry : LQ) {
           if (lq_entry->instr_id == it->instr_id) {
             lq_entry.reset();
@@ -1078,9 +1094,13 @@ long O3_CPU::retire_rob()
           x.get().invalid = true;
         }
       }
+      else
+        sim_stats.num_of_useful_instructions++;
     }
+
     instr_to_file_pos.pop_front();
-    base = instr_to_file_pos.front();
+    if (!instr_to_file_pos.empty())
+      base = instr_to_file_pos.front();
     it++;
   }
 

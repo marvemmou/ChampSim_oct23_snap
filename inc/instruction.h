@@ -86,12 +86,14 @@ struct ooo_model_instr {
 
   bool is_cxl = false;
   bool is_warmup = false;
-  // whether we replay the instr or not
+  // whether we should replay the instr or not
   bool is_in_runahead = false;
   // whether the instr should be retired immediately or not
   bool useful = false;
   // whether the instr is part of a valid execution chain or not
   bool invalid = false;
+  // whether this is the replayed instance or not
+  bool from_replay = false;
 
 
   mlp_instr mlp_trace_info = {};
