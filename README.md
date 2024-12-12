@@ -1,85 +1,61 @@
-# ChampSim
+# Stats Description
 
-![GitHub](https://img.shields.io/github/license/ChampSim/ChampSim)
-![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/ChampSim/ChampSim/test.yml)
-![GitHub forks](https://img.shields.io/github/forks/ChampSim/ChampSim)
-[![Coverage Status](https://coveralls.io/repos/github/ChampSim/ChampSim/badge.svg?branch=develop)](https://coveralls.io/github/ChampSim/ChampSim?branch=develop)
+The meaning of each new statistic is described in the order it has been printed. Stats whose names are self explanatory are omitted. 
 
-ChampSim is a trace-based simulator for a microarchitecture study. If you have questions about how to use ChampSim, we encourage you to search the threads in the Discussions tab or start your own thread. If you are aware of a bug or have a feature request, open a new Issue.
+## MLP Pred stats
 
-# Using ChampSim
+- MLP_{T/F, P/N}: (As per legacy MLP paper) Based on binary outcome. Predicted non-zero MLP when there is actual MLP is marked correct.
+- MLP_DIST_ACC: (As per legacy MLP paper) Prediction is considered correct if predicted MLP distance is more than actual MLP distance. Note: This metric is only relevant when using maximum MLP distance (as per MLP paper) and not for MLP density or true MLP
+- MLP Error: Average absolute difference between the predicted MLP distance and actual max MLP distance.
+- MLP_PERC_OVERLAP: Fraction of misses at the tail of LLSR having cycle overlap MLP with the head of LLSR
+- MLP_MIN_DIST: Min. distance to find MLP
+- MLP_MAX_DIST: (As per legacy MLP paper) Maximum MLP distance
+- MLP_DENSITY: Number of non-zeros in the LLSR
+- MLP_MAX_DIST_CYCLES: Max distance with cycle overlap
+- MLP_DENSITY_CYCLES: Density with cycle overlap
 
-ChampSim is the result of academic research. To support its continued growth, please cite our work when you publish results that use ChampSim by clicking "Cite this Repository" in the sidebar.
+## Crit Pred stats
 
-# Download dependencies
+- Top 10 IPs: Top 10 most frequent critical load IPs. Per IP stats are as follows
+- Freq: Percentage of all critical occurences
+- (Non) Crit Freq: Number of (non) crit occurences
+- Crit hit freq: Number of cache hits of an IP that became critical
+- Crit Cycles (all avg): Critical cycles/total occurences
+- Crit Cycles (Crit avg): Critical cycles/critical occurences
+- ACC/COV: FREQ: Testing purposes
 
-ChampSim uses [vcpkg](https://vcpkg.io) to manage its dependencies. In this repository, vcpkg is included as a submodule. You can download the dependencies with
-```
-git submodule update --init
-vcpkg/bootstrap-vcpkg.sh
-vcpkg/vcpkg install
-```
+## Distributions
 
-# Compile
+- Retire Cnt (n): Fraction of total cycles we committed n instructions
+- Crit_type: When no instruction was committed, what type of instruction was blocking head of the ROB
+- Crit_type1: Same as above but for thread 1
+- Addr Stats: Crit: For instructions that end up being critical, which level of cache hierarchy was their address located during fetch.
+- Addr Stats: NonCrit: Same as above but for non-critical loads
+- CO: Cycle outcome. What did each commit cycle do?
+  - Blocked on CS: Spent in context switching cost (Note: this will only show up if accounting for cost at retire)
+  - Blocked on RA: Spent in committing runahead instruction
+  - Blocked on some type of instrution
+  - Committed n instructions
 
-ChampSim takes a JSON configuration script. Examine `champsim_config.json` for a fully-specified example. All options described in this file are optional and will be replaced with defaults if not specified. The configuration scrip can also be run without input, in which case an empty file is assumed.
-```
-$ ./config.sh <configuration file>
-$ make
-```
+## MT Stats
 
-# Download DPC-3 trace
+- Sq stalls frac: Fraction of cycles fetch was stalled because SQ was full
+- Fetch stalls frac: Deprecated
+- Num RA: Fraction of runahead instructions which have completed execution when they are pseudo-committed
+- EDP: Energy delay product
+- Frac parallel exec: Fraction of cycles execution took place from different threads in the same cycle
+- RA_window: Average size of runahead window determined by the predicted MLP distance
+- Non_RA_window: Average size of normal instructions
+- RA_Loads_issued: Fraction of runahead loads that were inflight/completed when runahead instruction is pseudo-committed.
+- RA_DRAM_Loads_issued: Of the runahead loads which had their address in DRAM at fetch, how many of these were inflight/completed before getting pseudo-committed.
 
-Traces used for the 3rd Data Prefetching Championship (DPC-3) can be found here. (https://dpc3.compas.cs.stonybrook.edu/champsim-traces/speccpu/) A set of traces used for the 2nd Cache Replacement Championship (CRC-2) can be found from this link. (http://bit.ly/2t2nkUj)
+# Run configurables
 
-Storage for these traces is kindly provided by Daniel Jimenez (Texas A&M University) and Mike Ferdman (Stony Brook University). If you find yourself frequently using ChampSim, it is highly encouraged that you maintain your own repository of traces, in case the links ever break.
+- The policy to throw away all runahead instructions at retire is used, regardless of whether they had executed.
+- The context switching cost can be incurred in two ways-
+  - Flush penalty: Delay flush by these many cycles whenever we context switch. Configured using FLUSH_PENALTY_ macro in ooo_cpu.cc
+  - Retire cycle cost: Whenever retire switches threads, we stall the ROB for CS_COST number of cycles. Again macro in ooo_cpu.cc
+- Number of runahead instructions: Set using instr_until_cs variable
+- Cooldown instructions: Set using cooldown_instrs variable
 
-# Run simulation
 
-Execute the binary directly.
-```
-$ bin/champsim --warmup_instructions 200000000 --simulation_instructions 500000000 ~/path/to/traces/600.perlbench_s-210B.champsimtrace.xz
-```
-
-The number of warmup and simulation instructions given will be the number of instructions retired. Note that the statistics printed at the end of the simulation include only the simulation phase.
-
-# Add your own branch predictor, data prefetchers, and replacement policy
-**Copy an empty template**
-```
-$ mkdir prefetcher/mypref
-$ cp prefetcher/no_l2c/no.cc prefetcher/mypref/mypref.cc
-```
-
-**Work on your algorithms with your favorite text editor**
-```
-$ vim prefetcher/mypref/mypref.cc
-```
-
-**Compile and test**
-Add your prefetcher to the configuration file.
-```
-{
-    "L2C": {
-        "prefetcher": "mypref"
-    }
-}
-```
-Note that the example prefetcher is an L2 prefetcher. You might design a prefetcher for a different level.
-
-```
-$ ./config.sh <configuration file>
-$ make
-$ bin/champsim --warmup_instructions 200000000 --simulation_instructions 500000000 600.perlbench_s-210B.champsimtrace.xz
-```
-
-# How to create traces
-
-Program traces are available in a variety of locations, however, many ChampSim users wish to trace their own programs for research purposes.
-Example tracing utilities are provided in the `tracer/` directory.
-
-# Evaluate Simulation
-
-ChampSim measures the IPC (Instruction Per Cycle) value as a performance metric. <br>
-There are some other useful metrics printed out at the end of simulation. <br>
-
-Good luck and be a champion! <br>
