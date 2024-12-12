@@ -187,7 +187,6 @@ void PageTableWalker::finish_packet(const response_type& packet)
       std::partition(std::begin(MSHR), std::end(MSHR), [addr = packet.address](auto x) { return (x.address >> LOG2_BLOCK_SIZE) == (addr >> LOG2_BLOCK_SIZE); });
 
   std::for_each(std::begin(MSHR), last_finished, [finish_step, finish_last_step](auto& mshr_entry) {
-    if (mshr_entry.v_address == 140260707820800) std::cout << "Level " << mshr_entry.translation_level << ", ";
     if (mshr_entry.translation_level > 0)
       finish_step(mshr_entry);
     else

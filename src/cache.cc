@@ -257,10 +257,10 @@ bool CACHE::handle_miss(const tag_lookup_type& handle_pkt)
     }
 
 
-    if (this->NAME == "LLC" && handle_pkt.rob_it != NULL && handle_pkt.instr_id == handle_pkt.rob_it->instr_id && !handle_pkt.rob_it->cant_trigger_switch) {
-      assert(handle_pkt.instr_id == handle_pkt.rob_it->instr_id);
-      handle_pkt.rob_it->went_offchip = true;
-    }
+    // if (this->NAME == "LLC" && handle_pkt.rob_it != NULL && handle_pkt.instr_id == handle_pkt.rob_it->instr_id && !handle_pkt.rob_it->cant_trigger_switch) {
+    //   assert(handle_pkt.instr_id == handle_pkt.rob_it->instr_id);
+    //   handle_pkt.rob_it->went_offchip = true;
+    // }
 
     request_type fwd_pkt;
 

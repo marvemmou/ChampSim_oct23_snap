@@ -46,11 +46,15 @@
 #include "vmem.h"
 
 #include <fstream>
+#include <atomic>
+#define FREQUENCY 2   // GHz
+#define VOLTAGE 0.9   // V
+#define Csw 2   // nf
 
 enum STATUS { INFLIGHT = 1, COMPLETED = 2 };
 enum INST_TYPE { L1 = 0, L2 = 1, LLC = 2, DRAM = 3, ST = 4, BR = 5, EX = 6, INST_TYPE_CNT = 7 };
 
-//class CACHE;
+class CACHE;
 class CacheBus
 {
   using channel_type = champsim::channel;
@@ -87,21 +91,39 @@ struct cpu_stats {
   CRITICALITY_STATS crit_stats[CRIT_TYPE_COUNT] = {};   // Global crit stats
   std::map<uint64_t, per_load_stats> per_load_stat;
   double retire_cnt_distr[9] = {0};
-  double crit_cycles_thr0[2] = {0};
-  double crit_cycles_thr[2] = {0};
-  double crit_type[2][9] = {0};  // ld, st, br, ex
+  double crit_cycles_thr0[16] = {0};
+  double crit_cycles_thr[16] = {0};
+  double crit_type[16][9] = {0};  // ld, st, br, ex
+  double sq_stalls = 0;
+  double sq_stalls_den = 0;
+  double fetch_stalls_num = 0;
+  double fetch_stalls_den = 0;
+  double num_ra = 0;
+  double num_ra_exec = 0;
+  
+  // Energy Calcs
+  double window_cycles = 0;
+  double retired_insts_window = 0;
+  double total_energy = 0;
+  double total_cycles = 0;
 
   MLP_STATS MLP_stats;
+  uint64_t rob_stalls = 0;
+  uint64_t num_context_switches = 0;
+  uint64_t num_of_useless_instructions = 0;
+  uint64_t num_of_useful_instructions = 0;
+  uint64_t num_of_runahead_instructions = 0;
 };
 
 struct LSQ_ENTRY {
   uint64_t instr_id = 0;
   uint64_t virtual_address = 0;
   uint64_t ip = 0;
-  uint64_t event_cycle = 0;
+  uint64_t event_cycle = std::numeric_limits<uint64_t>::max();
   std::string hit_level = "none";
   uint64_t exec_cycle = 0;
   uint64_t ret_cycle = 0;
+  bool is_in_runahead = false;
 
   std::array<uint8_t, 2> asid = {std::numeric_limits<uint8_t>::max(), std::numeric_limits<uint8_t>::max()};
   bool fetch_issued = false;
@@ -109,7 +131,7 @@ struct LSQ_ENTRY {
   uint64_t producer_id = std::numeric_limits<uint64_t>::max();
   std::vector<std::reference_wrapper<std::optional<LSQ_ENTRY>>> lq_depend_on_me{};
 
-  LSQ_ENTRY(uint64_t id, uint64_t addr, uint64_t ip, std::array<uint8_t, 2> asid);
+  LSQ_ENTRY(uint64_t id, uint64_t addr, uint64_t ip, std::array<uint8_t, 2> asid, bool in_runahead);
   void finish(std::deque<ooo_model_instr>::iterator begin, std::deque<ooo_model_instr>::iterator end) const;
 
   uint8_t merged = 0;
@@ -136,7 +158,8 @@ public:
   uint32_t cpu = 0;
   std::vector<std::reference_wrapper<CACHE>> cache_view;
   std::vector<std::reference_wrapper<PageTableWalker>> ptw_view;
-
+  uint64_t cooldown_instrs = 0;
+  uint64_t unique_instr_id = 0;
 
   // cycle
   uint64_t begin_phase_cycle = 0;
@@ -161,6 +184,17 @@ public:
   /* per-thread; set to 1 when a switch condition is met, set to 0 when the instigator is retired
         checked in operate to decide whether to call pipeline_flush*/
   bool do_pipeline_flush[16] = {};
+  bool do_context_switch[16] = {};
+  uint64_t instr_until_cs = 100;
+
+  std::vector<std::reference_wrapper<CACHE>>  caches;
+
+  bool in_runahead[16] = {};
+  bool tmp_in_runahead[16] = {};
+  uint64_t runahead_trace_id = 0;
+  std::atomic<uint64_t> instrs_in_runahead[16] = {};
+  int print_after_crit = 20;
+
   // per-smt-core; set to the rob_it that caused the switch
   std::deque<ooo_model_instr>::iterator flush_it;
 
@@ -214,9 +248,13 @@ public:
   uint64_t last_flush_cycle = 0, last_retire_cycle = 0;
 
   bool is_cgmt = 0;
+  bool record = 0;
 
-  std::ofstream outfile[16];
+  std::ofstream outfile;
+  std::ifstream infile[16];
   std::ofstream timestamp_file;
+
+  uint64_t instrs_per_trace[16] = {};
 
   mlp_instr instigator;
   uint64_t issue_mlp = 0;
@@ -258,6 +296,9 @@ public:
   // 1 input queue per thread on a core
   std::deque<ooo_model_instr> input_queue[16];
 
+  std::deque<ooo_model_instr> oracle_queue[16];
+  std::deque<ooo_model_instr> to_core_queue[16];
+
   CacheBus L1I_bus, L1D_bus;
   CACHE* l1i;
 
@@ -295,6 +336,7 @@ public:
   bool execute_load(const LSQ_ENTRY& lq_entry);
   ADDRESS_STATUS get_address_status(uint32_t cpu, uint64_t v_address, uint64_t instr_id=0);
   void pipeline_flush();
+  void mark_register_dependencies(ooo_model_instr& instr);
 
   uint64_t roi_instr() const { return roi_stats.instrs(); }
   uint64_t roi_cycle() const { return roi_stats.cycles(); }

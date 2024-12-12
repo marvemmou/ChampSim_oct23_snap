@@ -318,7 +318,7 @@ bool MEMORY_CONTROLLER::add_rq(const request_type& packet, champsim::channel* ul
       rq_it != std::end(channel.RQ)) {
     *rq_it = DRAM_CHANNEL::request_type{packet};
     rq_it->value().forward_checked = false;
-    rq_it->value().event_cycle = current_cycle;
+    rq_it->value().event_cycle = current_cycle + 0;
     if (packet.response_requested)
       rq_it->value().to_return = {&ul->returned};
 

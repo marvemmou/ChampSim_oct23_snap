@@ -22,6 +22,7 @@
 #include "stats_printer.h"
 #include <fmt/core.h>
 #include <fmt/ostream.h>
+#include "ooo_cpu.h"
 
 void champsim::plain_printer::print(O3_CPU::stats_type stats)
 {
@@ -40,6 +41,12 @@ void champsim::plain_printer::print(O3_CPU::stats_type stats)
   fmt::print(stream, "{} Branch Prediction Accuracy: {:.4g}% MPKI: {:.4g} Average ROB Occupancy at Mispredict: {:.4g}\n", stats.name,
              (100.0 * std::ceil(total_branch - total_mispredictions)) / total_branch, (1000.0 * total_mispredictions) / std::ceil(stats.instrs()),
              std::ceil(stats.total_rob_occupancy_at_branch_mispredict) / total_mispredictions);
+
+  fmt::print(stream, "{} ROB stalls due to an llc miss: {}\n", stats.name, stats.rob_stalls);
+  fmt::print(stream, "{} Context Switches: {}\n", stats.name, stats.num_context_switches);
+  fmt::print(stream, "{} Instructions retired during runahead without executing: {}\n", stats.name, stats.num_of_useless_instructions);
+  fmt::print(stream, "{} Instructions retired during runahead after executing: {}\n", stats.name, stats.num_of_useful_instructions);
+  fmt::print(stream, "{} Instructions retired in runahead: {}\n", stats.name, stats.num_of_runahead_instructions);
 
   std::vector<double> mpkis;
   std::transform(std::begin(stats.branch_type_misses), std::end(stats.branch_type_misses), std::back_inserter(mpkis),
@@ -107,6 +114,16 @@ void champsim::plain_printer::print(O3_CPU::stats_type stats)
   fmt::print("Crit Cycles per thread: 0: {}, 1: {}\n", stats.crit_cycles_thr[0], stats.crit_cycles_thr[1]);
   fmt::print("Addr Stats: Crit- L1: {:.4}, L2: {:.4}, LLC: {:.4}, DRAM: {:.4}, Pg_fault: {:.4}\n", stats.crit_stats[CRIT].addr_status[L1]/stats.crit_stats[CRIT].cnt, stats.crit_stats[CRIT].addr_status[L2]/stats.crit_stats[CRIT].cnt, stats.crit_stats[CRIT].addr_status[L3]/stats.crit_stats[CRIT].cnt, stats.crit_stats[CRIT].addr_status[DRAM_]/stats.crit_stats[CRIT].cnt, stats.crit_stats[CRIT].addr_status[PG_FAULT]/stats.crit_stats[CRIT].cnt);
   fmt::print("Addr Stats: NonCrit- L1: {:.4}, L2: {:.4}, LLC: {:.4}, DRAM: {:.4}, Pg_fault: {:.4}\n", stats.crit_stats[NON_CRIT].addr_status[L1]/stats.crit_stats[NON_CRIT].cnt, stats.crit_stats[NON_CRIT].addr_status[L2]/stats.crit_stats[NON_CRIT].cnt, stats.crit_stats[NON_CRIT].addr_status[L3]/stats.crit_stats[NON_CRIT].cnt, stats.crit_stats[NON_CRIT].addr_status[DRAM_]/stats.crit_stats[NON_CRIT].cnt, stats.crit_stats[NON_CRIT].addr_status[PG_FAULT]/stats.crit_stats[NON_CRIT].cnt);
+  fmt::print(stream, "\n");
+
+  fmt::print(stream, "\nSH: -------------- MT STATS -----------------\n");
+  fmt::print("Sq stalls frac: {:.4}, tot: {}\n", stats.sq_stalls/stats.sq_stalls_den, stats.sq_stalls_den);
+  fmt::print("Fetch stalls frac: {:.4}, tot: {}\n", stats.fetch_stalls_num/stats.fetch_stalls_den, stats.fetch_stalls_den);
+  fmt::print("Num RA: {:.4}\n", stats.num_ra_exec/stats.num_ra);
+  fmt::print("Total energy: {:.4} J\n", stats.total_energy);
+  fmt::print("EDP: {:.4} J-s\n", stats.total_energy*stats.total_cycles/(FREQUENCY*1e9));
+  fmt::print("Total Cycles: {}\n", stats.total_cycles);
+
   fmt::print(stream, "\n");
 }
 

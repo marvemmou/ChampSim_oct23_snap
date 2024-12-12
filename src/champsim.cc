@@ -30,7 +30,7 @@
 #include <fmt/chrono.h>
 #include <fmt/core.h>
 
-constexpr int DEADLOCK_CYCLE{500};
+constexpr int DEADLOCK_CYCLE{5000000};
 
 auto start_time = std::chrono::steady_clock::now();
 
@@ -48,7 +48,7 @@ phase_stats do_phase(phase_info phase, environment& env, std::vector<tracereader
     op.warmup = is_warmup;
     op.begin_phase();
   }
-  uint64_t thread_offset=0;
+
   // Perform phase
   int stalled_cycle{0};
   std::vector<bool> phase_complete(std::size(env.cpu_view()), false);
@@ -80,9 +80,45 @@ phase_stats do_phase(phase_info phase, environment& env, std::vector<tracereader
       if(cpu.is_cgmt) {
         for(auto i=0; i<traces.size(); i++) {
           auto& trace = traces.at(trace_index.at(i));
-          if (i != 0 || thread_offset == 0)
-            for (auto pkt_count = cpu.IN_QUEUE_SIZE - static_cast<long>(std::size(cpu.input_queue[i])); !trace.eof() && pkt_count > 0; --pkt_count)
+          
+          // std::cout << std::endl << i << " Before " << std::endl;
+          // for (auto instr: cpu.input_queue[i]) {
+          //   std::cout << "Instr_id: " << instr.instr_id << ", IP: " << instr.ip << " ";
+          //   if (instr.source_memory.size() > 0)
+          //     for (auto mem: instr.source_memory)
+          //       std::cout << "Source Mem: " << mem << " ";
+          //   std::cout << "Src Reg: ";
+          //   for (auto reg: instr.source_registers)
+          //     std::cout << static_cast<int> (reg) << " ";
+          //   std::cout << "Dest Reg: ";              
+          //   for (auto reg: instr.destination_registers)
+          //     std::cout << static_cast<int> (reg) << " ";
+
+          //   std::cout << std::endl;
+          // }
+
+          for (auto pkt_count = cpu.IN_QUEUE_SIZE - static_cast<long>(std::size(cpu.input_queue[i])); !trace.eof() && pkt_count > 0; --pkt_count) {
+            // offset traces
+            // cpu.instrs_per_trace[i]++;
+            // if (cpu.instrs_per_trace[i] > i*10000)
               cpu.input_queue[i].push_back(trace());
+          }
+
+          // std::cout << std::endl << i << " After " << std::endl;
+          // for (auto instr: cpu.input_queue[i]) {
+          //   std::cout << "Instr_id: " << instr.instr_id << ", IP: " << instr.ip << " ";
+          //   if (instr.source_memory.size() > 0)
+          //     for (auto mem: instr.source_memory)
+          //       std::cout << "Source Mem: " << mem << " ";
+          //   std::cout << "Src Reg: ";
+          //   for (auto reg: instr.source_registers)
+          //     std::cout << static_cast<int> (reg) << " ";
+          //   std::cout << "Dest Reg: ";              
+          //   for (auto reg: instr.destination_registers)
+          //     std::cout << static_cast<int> (reg) << " ";
+
+          //   std::cout << std::endl;
+          // }
 
           // If any trace reaches EOF, terminate all phasesb 
           if (trace.eof())
@@ -118,7 +154,6 @@ phase_stats do_phase(phase_info phase, environment& env, std::vector<tracereader
     }
 
     phase_complete = next_phase_complete;
-    if (thread_offset > 0) thread_offset--;
   }
 
   for (O3_CPU& cpu : env.cpu_view()) {

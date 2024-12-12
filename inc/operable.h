@@ -33,7 +33,7 @@ public:
 
   long _operate()
   {
-    // skip periodically
+    //skip periodically
     if (leap_operation >= 1) {
       leap_operation -= 1;
       return 0;
